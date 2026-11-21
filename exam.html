@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pre-Join Exam</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top"><h1 id="company">Pre-Join Exam</h1><span id="who" class="muted" style="color:#cfe0ff"></span></header>
+
+<div class="wrap">
+
+  <!-- Login -->
+  <section id="login" class="card screen" hidden>
+    <h2>Candidate Login</h2>
+    <p class="muted">তোমার registered email দাও। আমরা একটি login link পাঠাব, সেই link এ ক্লিক করলেই exam page খুলবে।</p>
+    <label for="email">Email</label>
+    <input id="email" type="email" placeholder="you@example.com" autocomplete="email">
+    <p><button id="sendLink">Send login link</button></p>
+    <div id="loginErr" class="err"></div>
+  </section>
+
+  <!-- Link sent -->
+  <section id="sent" class="card screen" hidden>
+    <h2>Check your email</h2>
+    <p>Login link পাঠানো হয়েছে। Inbox (এবং Spam folder) চেক করে link এ ক্লিক করো। এই একই browser এ link টি খুলতে হবে।</p>
+  </section>
+
+  <!-- Message -->
+  <section id="msg" class="card screen" hidden>
+    <h2 id="msgTitle"></h2>
+    <p id="msgBody"></p>
+    <button class="sec" id="logout1">Logout</button>
+  </section>
+
+  <!-- Intro -->
+  <section id="intro" class="card screen" hidden>
+    <h2>Welcome, <span id="cName"></span></h2>
+    <p class="muted"><b>Position:</b> <span id="cDesig"></span></p>
+    <ul>
+      <li>মোট প্রশ্ন: <b id="iCount"></b></li>
+      <li>সময়: <b id="iDur"></b> মিনিট</li>
+      <li>Start চাপার সাথে সাথে timer শুরু হবে এবং থামানো যাবে না। Page refresh করলেও সময় চলতে থাকবে।</li>
+      <li>সময় শেষ হলে উত্তর নিজে থেকেই submit হয়ে যাবে।</li>
+      <li>একবার submit করলে আর পরিবর্তন করা যাবে না।</li>
+      <li>অন্য tab এ যাওয়া রেকর্ড করা হয়।</li>
+    </ul>
+    <button id="startBtn">Start Exam</button>
+    <div id="startErr" class="err"></div>
+  </section>
+
+  <!-- Exam -->
+  <section id="exam" class="screen" hidden>
+    <div class="timer" id="timerBar"><span>Time left</span><span id="timer">--:--</span></div>
+    <div id="questions"></div>
+    <div class="card"><button id="submitBtn">Submit Exam</button>
+      <span class="muted" id="answered"></span><div id="subErr" class="err"></div></div>
+  </section>
+
+  <!-- Done -->
+  <section id="done" class="card screen" hidden>
+    <h2>Exam submitted ✔</h2>
+    <p>তোমার উত্তর সফলভাবে জমা হয়েছে। ধন্যবাদ। আমরা শীঘ্রই যোগাযোগ করব।</p>
+  </section>
+</div>
+
+<script type="module">
+import {firebaseConfig, COMPANY_NAME} from "./firebase-config.js";
+import {initializeApp} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import {getAuth,isSignInWithEmailLink,sendSignInLinkToEmail,signInWithEmailLink,onAuthStateChanged,signOut}
+  from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+import {getFirestore,doc,getDoc,setDoc,updateDoc,serverTimestamp}
+  from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function show(id){ document.querySelectorAll('.screen').forEach(s => s.hidden = (s.id !== id)); }
+function message(t,b){ $('msgTitle').textContent=t; $('msgBody').textContent=b; show('msg'); }
+
+$('company').textContent = COMPANY_NAME + " – Pre-Join Exam";
+document.title = COMPANY_NAME + " Exam";
+
+let offset = 0, email = '', attempt = null, qset = null, answers = {}, tabSwitches = 0, timerId = null, submitting = false;
+
+// ---------- Login ----------
+$('sendLink').onclick = async () => {
+  const e = $('email').value.trim().toLowerCase();
+  $('loginErr').textContent = '';
+  if (!e) { $('loginErr').textContent = 'Email দাও।'; return; }
+  try {
+    await sendSignInLinkToEmail(auth, e, {url: location.origin + location.pathname, handleCodeInApp: true});
+    localStorage.setItem('emailForSignIn', e);
+    show('sent');
+  } catch (err) { $('loginErr').textContent = 'Link পাঠানো যায়নি: ' + err.message; }
+};
+$('logout1').onclick = () => signOut(auth).then(() => location.href = location.pathname);
+
+async function completeLinkLogin(){
+  if (!isSignInWithEmailLink(auth, location.href)) return;
+  let e = localStorage.getItem('emailForSignIn') || prompt('নিরাপত্তার জন্য তোমার email আবার দাও:');
+  try {
+    await signInWithEmailLink(auth, (e || '').trim().toLowerCase(), location.href);
+    localStorage.removeItem('emailForSignIn');
+  } catch (err) { alert('Login link কাজ করেনি বা মেয়াদ শেষ। আবার link নাও।'); }
+  history.replaceState({}, '', location.pathname);
+}
+
+onAuthStateChanged(auth, async user => {
+  await completeLinkLogin().catch(()=>{});
+  const u = auth.currentUser;
+  if (!u) { show('login'); return; }
+  init(u).catch(err => message('Error', err.message));
+});
+
+// ---------- Init ----------
+async function init(user){
+  email = user.email.toLowerCase();
+  $('who').textContent = email;
+
+  const cand = await getDoc(doc(db, 'candidates', email));
+  if (!cand.exists()) return message('Not registered', 'এই email দিয়ে কোনো exam নির্ধারিত নেই। HR এর সাথে যোগাযোগ করো।');
+  const c = cand.data();
+
+  // server সময়ের সাথে client এর পার্থক্য
+  await setDoc(doc(db, 'pings', email), {t: serverTimestamp()});
+  const p = await getDoc(doc(db, 'pings', email));
+  offset = p.data().t.toMillis() - Date.now();
+
+  const at = await getDoc(doc(db, 'attempts', email));
+  if (at.exists() && at.data().status === 'submitted')
+    return message('Already submitted', 'তুমি ইতোমধ্যে এই exam জমা দিয়েছ।');
+
+  const qs = await getDoc(doc(db, 'questionSets', c.designation));
+  if (!qs.exists()) return message('Not ready', 'তোমার position এর প্রশ্ন এখনও প্রস্তুত হয়নি। HR এর সাথে যোগাযোগ করো।');
+  qset = qs.data();
+
+  if (at.exists()) { attempt = at.data(); return runExam(); }
+
+  $('cName').textContent = c.name; $('cDesig').textContent = c.designation;
+  $('iCount').textContent = qset.questions.length; $('iDur').textContent = qset.durationMin;
+  show('intro');
+
+  $('startBtn').onclick = async () => {
+    $('startBtn').disabled = true; $('startErr').textContent = '';
+    try {
+      await setDoc(doc(db, 'attempts', email), {
+        name: c.name, email, designation: c.designation, durationMin: qset.durationMin,
+        startedAt: serverTimestamp(), status: 'started', answers: {}
+      });
+      attempt = (await getDoc(doc(db, 'attempts', email))).data();
+      runExam();
+    } catch (err) { $('startErr').textContent = 'Start করা যায়নি: ' + err.message; $('startBtn').disabled = false; }
+  };
+}
+
+// ---------- Exam ----------
+function runExam(){
+  answers = JSON.parse(localStorage.getItem('ans_' + email) || '{}');
+  tabSwitches = Number(localStorage.getItem('tab_' + email) || 0);
+  const box = $('questions'); box.innerHTML = '';
+  qset.questions.forEach((q, i) => {
+    const d = document.createElement('div'); d.className = 'q';
+    let body = '';
+    if (q.type === 'mcq') {
+      body = q.options.map((o, k) =>
+        `<label class="opt"><input type="radio" name="${esc(q.id)}" value="${k}" ${answers[q.id] === k ? 'checked' : ''}><span>${esc(o)}</span></label>`).join('');
+    } else {
+      body = `<textarea data-q="${esc(q.id)}" placeholder="তোমার উত্তর লেখো...">${esc(answers[q.id] || '')}</textarea>`;
+    }
+    d.innerHTML = `<div class="qt">${i + 1}. ${esc(q.text)} <span class="muted">(${esc(q.marks)} marks)</span></div>${body}`;
+    box.appendChild(d);
+  });
+  box.addEventListener('input', onInput);
+  box.addEventListener('change', onInput);
+  updateCount();
+  show('exam');
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden && !submitting) { tabSwitches++; localStorage.setItem('tab_' + email, tabSwitches); }
+  });
+  window.addEventListener('beforeunload', e => { if (!submitting) { e.preventDefault(); e.returnValue = ''; } });
+  const endMs = attempt.startedAt.toMillis() + attempt.durationMin * 60000;
+  const tick = () => {
+    const left = endMs - (Date.now() + offset);
+    if (left <= 0) { $('timer').textContent = '00:00'; clearInterval(timerId); submit(true); return; }
+    const s = Math.floor(left / 1000), m = Math.floor(s / 60);
+    $('timer').textContent = String(m).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0');
+    $('timerBar').classList.toggle('low', left < 5 * 60000);
+  };
+  tick(); timerId = setInterval(tick, 1000);
+}
+
+function onInput(e){
+  const t = e.target;
+  if (t.type === 'radio') answers[t.name] = Number(t.value);
+  else if (t.dataset.q) answers[t.dataset.q] = t.value;
+  localStorage.setItem('ans_' + email, JSON.stringify(answers));
+  updateCount();
+}
+function updateCount(){
+  const n = qset.questions.filter(q => answers[q.id] !== undefined && answers[q.id] !== '').length;
+  $('answered').textContent = `  Answered ${n} / ${qset.questions.length}`;
+}
+
+$('submitBtn').onclick = () => { if (confirm('Submit করলে আর পরিবর্তন করা যাবে না। নিশ্চিত?')) submit(false); };
+
+async function submit(auto){
+  if (submitting) return; submitting = true;
+  $('submitBtn').disabled = true; $('subErr').textContent = 'Submitting...';
+  clearInterval(timerId);
+  for (let i = 0; i < 4; i++) {
+    try {
+      await updateDoc(doc(db, 'attempts', email), {
+        answers, status: 'submitted', submittedAt: serverTimestamp(), tabSwitches
+      });
+      localStorage.removeItem('ans_' + email); localStorage.removeItem('tab_' + email);
+      show('done'); return;
+    } catch (err) {
+      $('subErr').textContent = 'Submit এ সমস্যা, আবার চেষ্টা হচ্ছে... (' + err.code + ')';
+      await new Promise(r => setTimeout(r, 1500));
+    }
+  }
+  $('subErr').textContent = 'Submit হয়নি। Internet চেক করে আবার Submit চাপো।';
+  submitting = false; $('submitBtn').disabled = false;
+}
+</script>
+</body>
+</html>
