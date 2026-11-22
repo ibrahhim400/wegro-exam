@@ -83,7 +83,10 @@ function route(){
 }
 
 /* ---------- সাধারণ helper ---------- */
-const F = {q: '', p: '', s: ''};
+const F = {q: '', p: '', s: '', r: ''};
+const RES_LABEL = {pass: 'PASS', fail: 'FAIL', pending: 'Pending'};
+const resultOf = a => (a.result === 'pass' || a.result === 'fail') ? a.result : 'pending';
+const resultBadge = a => { const r = resultOf(a); return `<span class="badge ${r === 'pass' ? 'b-submitted' : r === 'fail' ? 'b-timeout' : 'b-hidden'}">${RES_LABEL[r]}</span>`; };
 const STATUS_LABEL = {submitted: 'Submitted', started: 'In progress', timeout: 'Time over'};
 function statusOf(a){
   if (a.status === 'submitted') return 'submitted';
@@ -142,9 +145,10 @@ async function viewSubs(){
       <div><label>Search</label><input id="fq" placeholder="নাম বা email"></div>
       <div><label>Position</label><select id="fp"><option value="">সব</option>${desigs.map(d => `<option>${esc(d)}</option>`).join('')}</select></div>
       <div><label>Status</label><select id="fs"><option value="">সব</option><option value="submitted">Submitted</option><option value="started">In progress</option><option value="timeout">Time over</option></select></div>
+      <div><label>Result</label><select id="fr"><option value="">সব</option><option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option></select></div>
     </div>
     <div style="overflow-x:auto;margin-top:10px"><table>
-      <thead><tr><th>Name</th><th>Email</th><th>Position</th><th>Status</th><th>Started</th><th>Submitted</th><th>Score</th><th></th></tr></thead>
+      <thead><tr><th>Name</th><th>Email</th><th>Position</th><th>Status</th><th>Started</th><th>Submitted</th><th>Score</th><th>Result</th><th></th></tr></thead>
       <tbody id="rows"></tbody></table></div></div>`;
 
   const scoreCell = a => {
@@ -154,25 +158,25 @@ async function viewSubs(){
     return c.pending ? `${c.mcq} / ${c.mcqMax} MCQ <span class="muted">· লিখিত বাকি</span>` : `<b>${c.total} / ${c.max}</b>`;
   };
   const draw = () => {
-    const q = $('#fq').value.trim().toLowerCase(), p = $('#fp').value, s = $('#fs').value;
-    F.q = $('#fq').value; F.p = p; F.s = s;
-    const rows = list.filter(a => (!q || (a.name + ' ' + a.email).toLowerCase().includes(q)) && (!p || a.designation === p) && (!s || statusOf(a) === s));
+    const q = $('#fq').value.trim().toLowerCase(), p = $('#fp').value, s = $('#fs').value, r = $('#fr').value;
+    F.q = $('#fq').value; F.p = p; F.s = s; F.r = r;
+    const rows = list.filter(a => (!q || (a.name + ' ' + a.email).toLowerCase().includes(q)) && (!p || a.designation === p) && (!s || statusOf(a) === s) && (!r || resultOf(a) === r));
     $('#cnt').textContent = rows.length;
     $('#rows').innerHTML = rows.map(a => { const st = statusOf(a);
       return `<tr><td>${esc(a.name)}</td><td>${esc(a.email)}</td><td>${esc(a.designation)}</td>
       <td><span class="badge b-${st}">${STATUS_LABEL[st]}</span></td>
-      <td>${fmt(a.startedAt)}</td><td>${fmt(a.submittedAt)}</td><td>${scoreCell(a)}</td>
+      <td>${fmt(a.startedAt)}</td><td>${fmt(a.submittedAt)}</td><td>${scoreCell(a)}</td><td>${resultBadge(a)}</td>
       <td style="white-space:nowrap"><a class="btn sm" href="#sheet/${encodeURIComponent(a.id)}">Answer sheet</a>
         <button class="sec sm" data-reset="${esc(a.id)}">Reset</button></td></tr>`; }).join('')
-      || '<tr><td colspan="8" class="muted">কিছু নেই</td></tr>';
+      || '<tr><td colspan="9" class="muted">কিছু নেই</td></tr>';
     $('#rows').querySelectorAll('[data-reset]').forEach(b => b.onclick = async () => {
       if (confirm(b.dataset.reset + ' এর attempt ও উত্তর মুছে আবার exam দেওয়ার সুযোগ দেবে?\n(মুছলে আর ফেরত পাবে না)')) {
         await deleteDoc(doc(db, 'attempts', b.dataset.reset)); viewSubs();
       }
     });
   };
-  $('#fq').value = F.q; $('#fp').value = F.p; $('#fs').value = F.s;
-  ['#fq', '#fp', '#fs'].forEach(s => $(s).oninput = draw);
+  $('#fq').value = F.q; $('#fp').value = F.p; $('#fs').value = F.s; $('#fr').value = F.r;
+  ['#fq', '#fp', '#fs', '#fr'].forEach(s => $(s).oninput = draw);
   draw();
 }
 
@@ -196,29 +200,32 @@ async function viewQuestions(){
     <tbody>${rows || '<tr><td colspan="8" class="muted">কোনো position নেই। নিচে Word file import করো।</td></tr>'}</tbody></table></div>
     <p class="muted">Hidden করলে candidate এর position তালিকায় ওই set দেখাবে না ও কেউ শুরু করতে পারবে না। আগের submission ও answer sheet ঠিকই থাকবে।</p></div>
 
-  <div class="card"><h2>Word file থেকে প্রশ্ন import</h2>
-    <p class="muted"><a href="question-template.docx" download>Word template ডাউনলোড করো</a>, ওতে প্রশ্ন বসিয়ে এখানে upload করো। Upload করলে আগে preview দেখাবে, তুমি ঠিক আছে দেখে Save করবে।</p>
-    <details><summary>Word এ কীভাবে লিখবে?</summary>
-<pre>Position: Accountant            (ঐচ্ছিক, না দিলে নিচে নিজে লিখবে)
-Title: Accountant Pre-Join Exam (ঐচ্ছিক)
-Duration: 30                    (মিনিট, ঐচ্ছিক)
-Show: 20                        (ঐচ্ছিক: প্রতি candidate কে pool থেকে ২০টি random প্রশ্ন)
+  <div class="card"><h2>নতুন Question Set যোগ করো</h2>
+    <div class="row">
+      <div><label>Designation (Position) *</label><input id="pn" placeholder="যেমন: Accountant"></div>
+      <div><label>সময় (মিনিট) *</label><input id="pd" type="number" min="1" placeholder="যেমন: 30"></div>
+    </div>
+    <label>Word file (.docx) *</label><input type="file" id="wf" accept=".docx">
+    <p><button id="readBtn">Upload করো</button> <a href="question-template.docx" download class="muted">Word নমুনা ফাইল</a></p>
+    <details><summary class="muted">আরও অপশন (ঐচ্ছিক)</summary>
+      <div class="row">
+        <div><label>Exam title</label><input id="ptitle" placeholder="ফাঁকা = Designation এর নাম"></div>
+        <div><label>প্রতি candidate কে কয়টি প্রশ্ন (random)</label><input id="pk" type="number" min="0" placeholder="ফাঁকা = সবগুলো"></div>
+      </div>
+      <label class="inline"><input type="checkbox" id="pv" checked> Candidate দের তালিকায় দেখাও (Visible)</label>
+    </details>
+    <div id="readMsg"></div><div id="prev"></div>
+    <details style="margin-top:12px"><summary class="muted">Word এ কীভাবে লিখবে?</summary>
+<pre>1. প্রশ্ন লেখো [2]        ← [2] = নম্বর (না দিলে ১)
+a) option
+b) option
+c) option
+Answer: b               ← MCQ হলে সঠিক উত্তর
 
-Q1. Which is a current asset? [2]      ← [2] = নম্বর (না দিলে ১)
-A. Land
-B. Cash in hand
-C. Long-term loan
-D. Goodwill
-Answer: B                              ← MCQ তে সঠিক উত্তর, একটিই অক্ষর
-
-Q2. Explain trial balance. [10]        ← option না থাকলে লিখিত প্রশ্ন
-Answer: (ঐচ্ছিক) মূল্যায়নকারীর জন্য আদর্শ উত্তর, candidate দেখবে না</pre>
-      <p class="muted">• প্রশ্ন Q1. বা 1. দিয়ে শুরু, option A. B. C. D. (বা ক. খ. গ. ঘ.)। Word এর নিজে-নিজে হওয়া numbering/bullet চললেও চলবে।<br>
-      • শুধু লেখা পড়া হয়, ছবি/টেবিলের ছবি বাদ যায়।</p></details>
-    <label>Word file (.docx)</label><input type="file" id="wf" accept=".docx">
-    <details><summary>অথবা সরাসরি লেখা paste করো</summary><textarea id="pt" style="min-height:160px" placeholder="Q1. ..."></textarea></details>
-    <p><button id="readBtn">Read &amp; Preview</button></p>
-    <div id="readMsg"></div><div id="prev" class="prev"></div></div>`;
+2. লিখিত প্রশ্ন [10]       ← option না থাকলে লিখিত প্রশ্ন
+Answer: আদর্শ উত্তর      ← ঐচ্ছিক, শুধু তুমি দেখবে</pre>
+      <p class="muted">প্রশ্নের শুরুতে নম্বর (1. 2. 3. বা ১। ২।) থাকলেই হবে। Word এর নিজে-নিজে হওয়া numbering চলবে।</p></details>
+  </div>`;
 
   $('#view').querySelectorAll('[data-hide]').forEach(b => b.onclick = async () => {
     await updateDoc(doc(db, 'positions', b.dataset.hide), {hidden: b.dataset.cur !== '1'}); viewQuestions();
@@ -235,9 +242,11 @@ Answer: (ঐচ্ছিক) মূল্যায়নকারীর জন�
   $('#readBtn').onclick = async () => {
     const msg = $('#readMsg'); msg.innerHTML = ''; $('#prev').innerHTML = '';
     try {
-      const f = $('#wf').files[0]; let text = $('#pt').value;
-      if (f) { await loadJSZip(); text = await docxToText(await f.arrayBuffer()); }
-      else if (!text.trim()) throw new Error('Word file বেছে নাও অথবা লেখা paste করো');
+      const f = $('#wf').files[0];
+      if (!f) throw new Error('Word file (.docx) বেছে নাও');
+      if (!/\.docx$/i.test(f.name)) throw new Error('শুধু .docx file চলবে। Word এ "Save As → Word Document (.docx)" করে নাও।');
+      await loadJSZip();
+      const text = await docxToText(await f.arrayBuffer());
       showPreview(parseQuestions(text), new Set(ps.docs.map(d => d.id)));
     } catch (e) { msg.innerHTML = '<div class="err">পড়া যায়নি: ' + esc(e.message) + '</div>'; }
   };
@@ -245,23 +254,20 @@ Answer: (ঐচ্ছিক) মূল্যায়নকারীর জন�
 
 function showPreview(parsed, existing){
   const m = parsed.meta, qs = parsed.questions;
-  const mcqN = qs.filter(q => q.type === 'mcq').length, total = qs.reduce((s, q) => s + q.marks, 0);
+  if (!$('#pn').value.trim() && m.position) $('#pn').value = m.position;
+  if (!$('#pd').value && m.duration) $('#pd').value = m.duration;
+  if (!$('#pk').value && m.pick) $('#pk').value = m.pick;
+  if (!$('#ptitle').value.trim() && m.title) $('#ptitle').value = m.title;
+  const mcqN = qs.filter(q => q.type === 'mcq').length;
   const qHtml = qs.map((q, i) => `<div class="q"><div class="qt">${i + 1}. ${esc(q.text)} <span class="muted">(${q.marks} marks · ${q.type === 'mcq' ? 'MCQ' : 'লিখিত'})</span></div>
     ${q.type === 'mcq' ? q.options.map((o, k) => `<div class="${k === q.answer ? 'good' : ''}" style="white-space:pre-wrap">${'ABCDEFGHIJ'[k]}. ${esc(o)} ${k === q.answer ? '✔' : ''}</div>`).join('')
       : (q.note ? `<div class="note"><b>Model answer:</b> ${esc(q.note)}</div>` : '<div class="muted">(লিখিত উত্তর)</div>')}</div>`).join('');
   $('#prev').innerHTML = `
-    ${parsed.errors.length ? `<div class="err"><b>ঠিক করতে হবে:</b><ul>${parsed.errors.map(e => `<li>${esc(e)}</li>`).join('')}</ul>Word file ঠিক করে আবার upload করো।</div>` : ''}
-    ${parsed.warnings.length ? `<div class="muted" style="color:#b26a00"><b>সতর্কতা:</b><ul>${parsed.warnings.map(e => `<li>${esc(e)}</li>`).join('')}</ul></div>` : ''}
-    <h3>Preview: ${qs.length} টি প্রশ্ন (MCQ ${mcqN}, লিখিত ${qs.length - mcqN}) · মোট নম্বর ${total}</h3>
-    <div class="row">
-      <div><label>Position নাম (candidate এটাই দেখবে)</label><input id="pn" value="${esc(m.position || '')}"></div>
-      <div><label>Exam title</label><input id="ptitle" value="${esc(m.title || '')}" placeholder="ঐচ্ছিক"></div>
-      <div><label>সময় (মিনিট)</label><input id="pd" type="number" min="1" value="${m.duration || ''}"></div>
-      <div><label>প্রতি candidate কে কয়টি প্রশ্ন (random)</label><input id="pk" type="number" min="0" max="${qs.length}" value="${m.pick || ''}" placeholder="ফাঁকা = সবগুলো"></div>
-    </div>
-    <label class="inline"><input type="checkbox" id="pv" checked> Candidate দের তালিকায় দেখাও (Visible)</label>
-    <p><button id="saveSet" ${parsed.errors.length ? 'disabled' : ''}>Save position</button> <span id="saveMsg"></span></p>
-    ${qHtml}`;
+    ${parsed.errors.length ? `<div class="err"><b>${parsed.errors.map(esc).join('<br>')}</b></div>`
+      : `<div class="result">✔ ${qs.length} টি প্রশ্ন পাওয়া গেছে (MCQ ${mcqN}, লিখিত ${qs.length - mcqN})</div>`}
+    ${parsed.warnings.length ? `<details style="margin-top:10px"><summary style="color:#b26a00">⚠ ${parsed.warnings.length} টি সতর্কতা (দেখো)</summary><ul class="muted">${parsed.warnings.map(e => `<li>${esc(e)}</li>`).join('')}</ul></details>` : ''}
+    <p><button id="saveSet" ${parsed.errors.length ? 'disabled' : ''}>✔ ঠিক আছে, Save করো</button> <span id="saveMsg"></span></p>
+    <details><summary>প্রশ্নগুলো দেখো</summary><div class="prev">${qHtml}</div></details>`;
 
   $('#saveSet').onclick = async () => {
     const msg = $('#saveMsg'); msg.innerHTML = '';
@@ -282,6 +288,7 @@ function showPreview(parsed, existing){
         name, title, durationMin: dur, pick, hidden: !$('#pv').checked,
         qids: s.qids, optCounts: s.optCounts, totalMarks: s.totalMarks, updatedAt: serverTimestamp()
       });
+      toast('✔ "' + name + '" Save হয়েছে');
       viewQuestions();
     } catch (e) { msg.innerHTML = '<span class="err">Save হয়নি: ' + esc(e.message) + '</span>'; $('#saveSet').disabled = false; }
   };
@@ -362,10 +369,13 @@ async function viewSheet(id){
     ${st !== 'submitted' ? `<div class="err">${st === 'timeout' ? 'Candidate submit করেনি, সময় শেষ হয়ে গেছে। শেষ auto-save হওয়া উত্তর দেখানো হচ্ছে।' : 'Candidate এখনও exam দিচ্ছে।'}</div>` : ''}
     <div class="score"><div>MCQ: <b>${c.mcq} / ${c.mcqMax}</b></div><div>Written: <b id="wtot">${c.wr} / ${c.wrMax}</b></div><div>Total: <b id="total">${c.total} / ${c.max}</b></div></div>
     ${qHtml}
+    <div class="score" style="margin-top:14px"><div><b>Result:</b>
+      <span class="noprint"><select id="res" style="width:auto;display:inline-block"><option value="">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option></select></span>
+      <b class="printonly-i" id="resv">${RES_LABEL[resultOf(att)]}</b></div></div>
     <div style="margin-top:16px"><label class="noprint">Remarks</label>
       <textarea id="remarks" class="noprint">${esc(att.remarks || '')}</textarea>
       <div class="printonly" style="white-space:pre-wrap"><b>Remarks:</b> <span id="remv">${esc(att.remarks || '')}</span></div></div>
-    <div class="noprint" style="margin-top:12px"><button id="save">Save marks</button> <span id="saveMsg"></span></div>
+    <div class="noprint" style="margin-top:12px"><button id="save">Save (marks, result, remarks)</button> <span id="saveMsg"></span></div>
     <div class="sig printonly"><div>Candidate</div><div>Evaluator</div></div>`)}</div>`;
 
   const recalc = () => {
@@ -376,7 +386,9 @@ async function viewSheet(id){
   const sync = () => {
     document.querySelectorAll('.gm').forEach(i => { const v = document.querySelector(`.gmv[data-q="${i.dataset.q}"]`); if (v) v.textContent = i.value || 0; });
     $('#remv').textContent = $('#remarks').value;
+    $('#resv').textContent = RES_LABEL[$('#res').value || 'pending'];
   };
+  $('#res').value = resultOf(att) === 'pending' ? '' : att.result;
   window.onbeforeprint = sync;
   $('#print').onclick = () => { sync(); window.print(); };
   $('#save').onclick = async () => {
@@ -387,7 +399,7 @@ async function viewSheet(id){
       grading[i.dataset.q] = v;
     }
     const t = recalc();
-    await updateDoc(doc(db, 'attempts', id), {grading, remarks: $('#remarks').value, totalScore: t, maxScore: c.max, gradedAt: serverTimestamp()});
+    await updateDoc(doc(db, 'attempts', id), {grading, remarks: $('#remarks').value, result: $('#res').value, totalScore: t, maxScore: c.max, gradedAt: serverTimestamp()});
     $('#saveMsg').innerHTML = '<span class="ok">Saved ✔</span>';
   };
 }
@@ -401,8 +413,6 @@ async function viewSettings(){
   try { const d = await getDoc(doc(db, 'settings', 'main')); if (d.exists()) s = d.data(); } catch (e) {}
   $('#view').innerHTML = `
   <div class="card"><h2>Settings</h2>
-    <label class="inline"><input type="checkbox" id="sr" ${s.showResult !== false ? 'checked' : ''}> Submit করার পর candidate কে তার MCQ score দেখাও</label>
-    <p class="muted" style="margin-top:0">চালু থাকলে (ডিফল্ট) submit করার পর candidate নিজের MCQ score দেখবে। লিখিত প্রশ্নের নম্বর কখনো দেখানো হয় না। সতর্কতা: এটা চালু থাকলে সঠিক উত্তরের তালিকা submit হওয়া candidate রা কারিগরি ভাবে পড়তে পারে, তাই পরের candidate দের সাথে শেয়ার হওয়ার ঝুঁকি থাকে। একই প্রশ্ন বারবার ব্যবহার করলে এটা বন্ধ রাখো।</p>
     <label class="inline"><input type="checkbox" id="dl" ${s.deviceLock !== false ? 'checked' : ''}> Device lock: যে browser/device থেকে exam দেওয়া হয়েছে সেখান থেকে অন্য email দিয়ে আবার দেওয়া যাবে না</label>
     <p class="muted" style="margin-top:0">অফিসের একটাই কম্পিউটারে একের পর এক candidate কে exam দেওয়ালে এটা বন্ধ রাখো (নইলে দ্বিতীয় জন আটকে যাবে)। একই email এ দ্বিতীয়বার exam দেওয়া সবসময় বন্ধ থাকে।</p>
     <p><button id="saveS">Save settings</button> <span id="sMsg"></span></p>
@@ -411,7 +421,7 @@ async function viewSettings(){
   </div>`;
   $('#saveS').onclick = async () => {
     try {
-      await setDoc(doc(db, 'settings', 'main'), {showResult: $('#sr').checked, deviceLock: $('#dl').checked, updatedAt: serverTimestamp()});
+      await setDoc(doc(db, 'settings', 'main'), {deviceLock: $('#dl').checked, updatedAt: serverTimestamp()});
       $('#sMsg').innerHTML = '<span class="ok">Saved ✔</span>';
     } catch (e) { $('#sMsg').innerHTML = '<span class="err">Save হয়নি: ' + esc(e.message) + '</span>'; }
   };

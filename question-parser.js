@@ -129,14 +129,17 @@ export async function docxToText(buf) {
 /* ---------------------------------------------------------------
    2) লেখা  ->  প্রশ্নের তালিকা
 ---------------------------------------------------------------- */
-const DIG = '[0-9\\u09E6-\\u09EF]';
-const LBL = '[A-Ja-j\\u0995\\u0996\\u0997\\u0998\\u0999\\u099A]';   // A-J, ক খ গ ঘ ঙ চ
+const DIG = '[0-9০-৯]';
+const LBL = '[A-Ja-jকখগঘঙচ]';   // A-J, ক খ গ ঘ ঙ চ
 const BN_LABEL = { 'ক': 0, 'খ': 1, 'গ': 2, 'ঘ': 3, 'ঙ': 4, 'চ': 5 };
 const labelIndex = ch => (ch in BN_LABEL) ? BN_LABEL[ch] : 'ABCDEFGHIJ'.indexOf(ch.toUpperCase());
 
-const RE_Q_PLAIN = new RegExp(`^(${DIG}{1,3})\\s*[.):]\\s*(.*)$`);
-const RE_Q_PREFIX = new RegExp(`^(?:Q(?:uestion|ues)?|\\u09AA\\u09CD\\u09B0\\u09B6\\u09CD\\u09A8)\\s*\\.?\\s*(${DIG}{1,3})\\s*[.):\\-\\u2013]?\\s*(.*)$`, 'i');
-const RE_OPT = new RegExp(`^\\(?(${LBL})\\s*[.):\\-\\u2013]\\s*(.+)$`);
+// প্রশ্ন নম্বরের পরের চিহ্ন: . ) : । (দাঁড়ি) ইত্যাদি। "1.5 kg" এর মতো দশমিক সংখ্যাকে প্রশ্ন ধরা হয় না
+const SEP = '[.):।৷．。․]';
+const NOT_DIGIT = '(?![0-9০-৯])';
+const RE_Q_PLAIN = new RegExp(`^(${DIG}{1,3})\\s*${SEP}${NOT_DIGIT}\\s*(.*)$`);
+const RE_Q_PREFIX = new RegExp(`^(?:Q(?:uestion|ues)?|প্রশ্ন)\\s*\\.?\\s*(${DIG}{1,3})\\s*(?:${SEP}|[\\-–])?${NOT_DIGIT}\\s*(.*)$`, 'i');
+const RE_OPT = new RegExp(`^\\(?(${LBL})\\s*[.):\\-–।]\\s*(.+)$`);
 const RE_BULLET = /^[•▪●○◦]\s*(.+)$/;
 const RE_ANS = /^(?:Answer|Ans|Correct\s*Answer|Correct|উত্তর|সঠিক\s*উত্তর)\s*[:：.\-–)]\s*(.*)$/i;
 const RE_ANS_LETTER = new RegExp(`^\\(?(${LBL})\\)?(?:[\\s.):,]|$)`);
@@ -150,6 +153,11 @@ const HEADERS = [
   [/^(?:Show|Pick|Draw|Random)\s*[:：]\s*(\d+)/i, 'pick']
 ];
 
+// অদৃশ্য চিহ্ন বাদ (বাংলার ZWJ/ZWNJ লাইনের ভেতরে থাকতে দেওয়া হয়)
+const INVIS = '​‎‏‪-‮⁠-⁤﻿­';
+const cleanLine = s => s.replace(new RegExp(`[${INVIS}]`, 'g'), '').replace(/[   ]/g, ' ')
+  .replace(/^[\s‌‍]+|[\s‌‍]+$/g, '');
+
 function matchOption(line, expected) {
   let m = line.match(RE_OPT);
   if (m && labelIndex(m[1]) === expected) return m[2].trim();
@@ -158,74 +166,89 @@ function matchOption(line, expected) {
   return null;
 }
 
+// যেভাবেই লেখা হোক, যতটা সম্ভব প্রশ্ন বের করে। MCQ ঠিকঠাক না হলে লিখিত প্রশ্ন ধরে (সতর্কতা সহ)।
 export function parseQuestions(raw) {
   const res = { meta: {}, questions: [], errors: [], warnings: [] };
-  let cur = null;
+  const lines = String(raw || '').split(/\r?\n/).map(cleanLine).filter(Boolean);
 
-  const finish = () => {
-    if (!cur) return;
-    const q = cur; cur = null;
-    const n = res.questions.length + 1, tag = 'Q' + n;
-    let text = q.text.trim();
-    const tm = text.match(RE_TRAIL);
-    if (tm) { if (q.marks == null) q.marks = Number(tm[1]); text = text.slice(0, tm.index).trim(); }
-    const marks = q.marks != null ? q.marks : 1;
-    if (!text) res.errors.push(`${tag}: প্রশ্নের লেখা নেই`);
-    if (!(marks > 0)) res.errors.push(`${tag}: marks ঠিক নেই`);
-    const out = { id: 'q' + n, text, marks };
-    const wantsText = q.forceType === 'text';
-    if (q.options.length >= 2 && !wantsText) {
-      out.type = 'mcq'; out.options = q.options;
-      const a = (q.ansRaw || '').trim();
-      let idx = -1;
-      const lm = a.match(RE_ANS_LETTER);
-      if (lm) idx = labelIndex(lm[1]);
-      else if (a) idx = q.options.findIndex(o => o.toLowerCase() === a.toLowerCase());
-      if (!a) res.errors.push(`${tag}: "Answer: B" ধরনের লাইন নেই`);
-      else if (idx < 0 || idx >= q.options.length) res.errors.push(`${tag}: Answer "${a.slice(0, 20)}" বোঝা যায়নি (শুধু একটি অক্ষর দাও, যেমন B)`);
-      else out.answer = idx;
-    } else {
-      if (q.options.length === 1) res.errors.push(`${tag}: মাত্র একটি option পাওয়া গেছে`);
-      out.type = 'text';
-      if (q.ansRaw) out.note = q.ansRaw.trim();
-    }
-    if (q.extra) res.warnings.push(`${tag}: Answer এর পরের অতিরিক্ত লেখা বাদ দেওয়া হয়েছে`);
-    res.questions.push(out);
-  };
-
-  for (const rawLine of String(raw || '').split(/\r?\n/)) {
-    const line = rawLine.replace(/[​-‍﻿]/g, '').replace(/ /g, ' ').trim();
-    if (!line) continue;
+  // ১) শুরুর header (Position/Duration...) আর প্রশ্নের টুকরো ভাগ
+  const blocks = []; let cur = null, skipped = 0;
+  for (const line of lines) {
     let m;
-
-    if (!cur && !res.questions.length) {
+    if (!cur) {
       let hit = false;
       for (const [re, key] of HEADERS) {
         if ((m = line.match(re))) { res.meta[key] = key === 'duration' || key === 'pick' ? Number(m[1]) : m[1].trim(); hit = true; break; }
       }
       if (hit) continue;
     }
-
     if ((m = line.match(RE_Q_PREFIX)) || (m = line.match(RE_Q_PLAIN))) {
-      finish();
-      cur = { text: m[2] || '', options: [], ansRaw: null, marks: null, forceType: null, closed: false, extra: false };
-      continue;
+      cur = { head: m[2] || '', body: [] }; blocks.push(cur); continue;
     }
-    if (!cur) { res.warnings.push(`প্রশ্নের আগের লাইন বাদ গেছে: "${line.slice(0, 40)}"`); continue; }
-
-    if ((m = line.match(RE_ANS))) { cur.ansRaw = m[1]; cur.closed = true; continue; }
-    if ((m = line.match(RE_MARKS))) { cur.marks = Number(m[1]); continue; }
-    if ((m = line.match(RE_TYPE))) { cur.forceType = /writ|text|essay|short|long|descr/i.test(m[1]) ? 'text' : null; continue; }
-
-    if (cur.closed) { cur.extra = true; continue; }
-    const opt = matchOption(line, cur.options.length);
-    if (opt !== null) { cur.options.push(opt); continue; }
-    if (cur.options.length) cur.options[cur.options.length - 1] += '\n' + line;
-    else cur.text += '\n' + line;
+    if (!cur) { skipped++; res.warnings.push(`প্রশ্নের আগের লাইন বাদ গেছে: "${line.slice(0, 40)}"`); continue; }
+    cur.body.push(line);
   }
-  finish();
 
-  if (!res.questions.length) res.errors.push('কোনো প্রশ্ন পাওয়া যায়নি। প্রশ্ন "Q1." বা "1." দিয়ে শুরু হতে হবে।');
+  // ২) কোনো নম্বর পাওয়া না গেলে প্রতিটি লাইনকে একটি লিখিত প্রশ্ন ধরি
+  if (!blocks.length) {
+    const rest = lines.filter(l => !HEADERS.some(([re]) => re.test(l)));
+    if (rest.length) {
+      res.warnings.length = 0;
+      res.warnings.push('প্রশ্নের নম্বর (1. 2. 3.) পাওয়া যায়নি, তাই প্রতিটি লাইনকে আলাদা লিখিত প্রশ্ন ধরা হয়েছে। নিচের তালিকা দেখে নাও।');
+      for (const l of rest) blocks.push({ head: l, body: [] });
+    }
+  }
+
+  // ৩) প্রতিটি টুকরো থেকে প্রশ্ন বানাই
+  blocks.forEach((blk, i) => {
+    const n = i + 1, tag = 'Q' + n;
+    let marks = null, forceText = false;
+    const answers = [], body = [];
+    for (const line of blk.body) {
+      let m;
+      if ((m = line.match(RE_ANS))) { answers.push(m[1].trim()); continue; }
+      if ((m = line.match(RE_MARKS))) { marks = Number(m[1]); continue; }
+      if ((m = line.match(RE_TYPE))) { forceText = /writ|text|essay|short|long|descr/i.test(m[1]); continue; }
+      body.push(line);
+    }
+    let head = blk.head.trim();
+    const tm = head.match(RE_TRAIL);
+    if (tm) { if (marks == null) marks = Number(tm[1]); head = head.slice(0, tm.index).trim(); }
+    if (!(marks > 0)) marks = 1;
+
+    // option খোঁজা
+    const textLines = head ? [head] : [], options = [];
+    for (const line of body) {
+      const o = matchOption(line, options.length);
+      if (o !== null) options.push(o);
+      else if (options.length) options[options.length - 1] += '\n' + line;
+      else textLines.push(line);
+    }
+
+    const out = { id: 'q' + n, marks };
+    let isMcq = false;
+    if (!forceText && options.length >= 2) {
+      let idx = -1;
+      if (answers.length === 1) {
+        const a = answers[0];
+        const lm = a.match(RE_ANS_LETTER);
+        idx = lm ? labelIndex(lm[1]) : options.findIndex(o => o.toLowerCase() === a.toLowerCase());
+      }
+      if (idx >= 0 && idx < options.length) { isMcq = true; out.type = 'mcq'; out.text = textLines.join('\n').trim(); out.options = options; out.answer = idx; }
+      else res.warnings.push(`${tag}: লিখিত প্রশ্ন ধরা হয়েছে (MCQ হলে option এর নিচে "Answer: B" ধরনের একটি লাইন দিতে হবে)`);
+    }
+    if (!isMcq) {
+      out.type = 'text';
+      out.text = [head, ...body].filter(Boolean).join('\n').trim();
+      if (answers.length) out.note = answers.join('\n');
+    }
+    if (!out.text) { res.warnings.push(`${tag}: প্রশ্নের লেখা নেই, বাদ দেওয়া হয়েছে`); return; }
+    res.questions.push(out);
+  });
+  // বাদ পড়লে id আবার সাজাই
+  res.questions.forEach((q, i) => q.id = 'q' + (i + 1));
+
+  if (!res.questions.length) res.errors.push('ফাইলে কোনো প্রশ্ন পাওয়া যায়নি। Word ফাইলে লেখা আছে কিনা দেখো।');
   return res;
 }
 

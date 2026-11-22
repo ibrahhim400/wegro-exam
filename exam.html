@@ -67,8 +67,7 @@
   <!-- Done -->
   <section id="done" class="card screen" hidden>
     <h2>Exam submitted ✔</h2>
-    <p id="doneMsg">তোমার উত্তর সফলভাবে জমা হয়েছে। ধন্যবাদ। আমরা শীঘ্রই যোগাযোগ করব।</p>
-    <div id="resultBox" class="result" hidden></div>
+    <p id="doneMsg">তোমার উত্তর সফলভাবে জমা হয়েছে। ধন্যবাদ। ফলাফল HR আলাদাভাবে জানিয়ে দেবে।</p>
   </section>
 </div>
 
@@ -320,22 +319,6 @@ async function submit(auto){
 async function showDone(auto){
   show('done');
   if (auto) $('doneMsg').textContent = 'সময় শেষ হয়ে যাওয়ায় তোমার উত্তর নিজে থেকেই জমা হয়েছে। ধন্যবাদ।';
-  if (settings.showResult === false) return;         // HR চাইলে Settings এ বন্ধ রাখতে পারে
-  try {
-    const k = await getDoc(doc(db, 'answerKeys', attempt.designation));
-    if (!k.exists()) return;
-    const key = k.data().answers || {};
-    const ids = (attempt.order && attempt.order.length ? attempt.order : qset.questions.map(q => q.id)).filter(id => byId[id]);
-    let got = 0, max = 0, written = 0;
-    ids.forEach(id => {
-      const q = byId[id];
-      if (q.type === 'mcq') { max += Number(q.marks) || 0; if (answers[id] !== undefined && answers[id] === key[id]) got += Number(q.marks) || 0; }
-      else written++;
-    });
-    $('resultBox').hidden = false;
-    $('resultBox').innerHTML = `<div>MCQ score: <b>${got} / ${max}</b></div>` +
-      (written ? `<div class="muted">লিখিত ${written} টি প্রশ্ন HR মূল্যায়ন করবে।</div>` : '');
-  } catch (e) { /* score দেখানো না গেলেও submit ঠিক আছে */ }
 }
 
 /* ---------- HR কে email নোটিফিকেশন (Web3Forms) ---------- */
