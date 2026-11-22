@@ -163,7 +163,7 @@ async function viewSubs(){
     const rows = list.filter(a => (!q || (a.name + ' ' + a.email).toLowerCase().includes(q)) && (!p || a.designation === p) && (!s || statusOf(a) === s) && (!r || resultOf(a) === r));
     $('#cnt').textContent = rows.length;
     $('#rows').innerHTML = rows.map(a => { const st = statusOf(a);
-      return `<tr><td>${esc(a.name)}</td><td>${esc(a.email)}</td><td>${esc(a.designation)}</td>
+      return `<tr><td>${esc(a.name)}</td><td>${esc(a.email)}${a.phone ? '<br><span class="muted">' + esc(a.phone) + '</span>' : ''}</td><td>${esc(a.designation)}</td>
       <td><span class="badge b-${st}">${STATUS_LABEL[st]}</span></td>
       <td>${fmt(a.startedAt)}</td><td>${fmt(a.submittedAt)}</td><td>${scoreCell(a)}</td><td>${resultBadge(a)}</td>
       <td style="white-space:nowrap"><a class="btn sm" href="#sheet/${encodeURIComponent(a.id)}">Answer sheet</a>
@@ -406,7 +406,7 @@ async function viewSheet(id){
     <h2 style="text-align:center;margin:4px 0 2px">${esc(COMPANY_NAME)} – Pre-Join Exam Answer Sheet</h2>
     <div style="text-align:center" class="muted">${esc(qset.title || att.designation)}</div>
     <div class="sheet-head" style="margin-top:14px"><div><h3 style="margin:0 0 4px">${esc(att.name)}</h3>
-      <div>${esc(att.email)}</div><div>Position: <b>${esc(att.designation)}</b></div></div>
+      <div>${esc(att.email)}</div>${att.phone ? `<div>Phone: ${esc(att.phone)}</div>` : ''}<div>Position: <b>${esc(att.designation)}</b></div></div>
       <div style="text-align:right"><div>Started: ${fmt(att.startedAt)}</div><div>Submitted: ${fmt(att.submittedAt)}</div>
       <div>Time allowed: ${att.durationMin} min · Taken: ${taken}</div>
       <div>Tab switches: ${att.tabSwitches ?? 0}</div><div>Status: <b>${STATUS_LABEL[st]}</b></div></div></div>

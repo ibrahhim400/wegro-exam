@@ -39,6 +39,8 @@
     <h2>Exam শুরুর আগে</h2>
     <label for="sName">তোমার পুরো নাম</label>
     <input id="sName" autocomplete="name" placeholder="যেমন: Md. Rahim Uddin">
+    <label for="sPhone">ফোন নাম্বার</label>
+    <input id="sPhone" type="tel" autocomplete="tel" placeholder="যেমন: 01XXXXXXXXX">
     <label for="sPos">তোমার Position</label>
     <select id="sPos"></select>
     <p id="sInfo" class="muted"></p>
@@ -177,6 +179,11 @@ async function showStart(){
     .sort((a, b) => des(a).localeCompare(des(b)));
   if (!positions.length) return message('No exam available', 'এখন কোনো exam চালু নেই। HR এর সাথে যোগাযোগ করো।');
 
+  // শুধু HR এর ঠিক করা Designation তালিকা থেকে দেখাই (Set এর নাম কখনো না)
+  let dl = [];
+  try { const dd = await getDoc(doc(db, 'settings', 'designations')); if (dd.exists()) dl = dd.data().list || []; } catch (e) {}
+  if (dl.length) positions = positions.filter(p => dl.includes(des(p)));
+  if (!positions.length) return message('No exam available', 'এখন কোনো exam চালু নেই। HR এর সাথে যোগাযোগ করো।');
   const names = [...new Set(positions.map(des))];
   $('sPos').innerHTML = '<option value="">— তোমার position বেছে নাও —</option>' +
     names.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join('');
@@ -188,7 +195,8 @@ async function showStart(){
   show('start');
   $('startBtn').onclick = startExam;
 }
-const des = p => p.designation || p.name;
+const stripSet = t => String(t || '').replace(/\s*[,\-–]?\s*Set\s*[A-Za-z]\s*$/i, '').trim();
+const des = p => p.designation || stripSet(p.name);
 const count = p => (p.pick > 0 ? Math.min(p.pick, p.qids.length) : p.qids.length);
 
 async function startExam(){
@@ -197,6 +205,8 @@ async function startExam(){
   const group = positions.filter(x => des(x) === $('sPos').value);
   const p = group.length ? group[Math.floor(Math.random() * group.length)] : null;   // একাধিক Set থাকলে random একটা
   if (name.length < 2) { $('startErr').textContent = 'তোমার নাম লেখো।'; return; }
+  const phone = $('sPhone').value.trim();
+  if (!/^\+?[0-9][0-9\s-]{8,17}$/.test(phone)) { $('startErr').textContent = 'সঠিক ফোন নাম্বার লেখো।'; return; }
   if (!p) { $('startErr').textContent = 'Position বেছে নাও।'; return; }
   if (!confirm(`${des(p)} এর exam এখনই শুরু হবে এবং ${p.durationMin} মিনিটের countdown চলবে। শুরু করবে?`)) return;
   $('startBtn').disabled = true;
@@ -206,7 +216,7 @@ async function startExam(){
     const optionOrder = {};
     order.forEach(id => { const n = p.optCounts && p.optCounts[id]; if (n) optionOrder[id] = shuffle([...Array(n).keys()]); });
     await setDoc(doc(db, 'attempts', email), {
-      name, email, designation: p.id, durationMin: p.durationMin,
+      name, phone, email, designation: p.id, durationMin: p.durationMin,
       startedAt: serverTimestamp(), status: 'started', answers: {}, order, optionOrder
     });
     if (settings.deviceLock !== false) devSet({email, at: Date.now()});
@@ -251,7 +261,7 @@ function runExam(){
   });
   box.addEventListener('input', onInput);
   box.addEventListener('change', onInput);
-  $('examTitle').textContent = qset.title || 'Exam';
+  $('examTitle').textContent = stripSet(qset.title) || 'Exam';
   $('examHeading').textContent = qset.heading || ''; $('examHeadingCard').hidden = !qset.heading;
   updateCount();
   show('exam');
@@ -339,7 +349,7 @@ async function notify(auto){
         subject: `New exam submission: ${attempt.name} (${attempt.designation})`,
         from_name: COMPANY_NAME + ' Exam System',
         name: attempt.name, email: email,
-        message: `Candidate: ${attempt.name}\nEmail: ${email}\nPosition: ${attempt.designation}\n` +
+        message: `Candidate: ${attempt.name}\nPhone: ${attempt.phone || ''}\nEmail: ${email}\nPosition: ${attempt.designation}\n` +
           `Submitted: ${new Date().toLocaleString()}${auto ? ' (auto-submitted, time over)' : ''}\n` +
           `Tab switches: ${tabSwitches}\n\nAnswer sheet: ${location.href.split('?')[0].replace('exam.html', 'admin.html')}#sheet/${encodeURIComponent(email)}`
       })
