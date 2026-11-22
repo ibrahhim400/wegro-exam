@@ -186,9 +186,16 @@ async function viewSubs(){
 async function viewQuestions(){
   $('#view').innerHTML = '<div class="card">Loading...</div>';
   const ps = await getDocs(collection(db, 'positions'));
-  const rows = ps.docs.map(d => ({id: d.id, ...d.data()})).sort((a, b) => a.name.localeCompare(b.name)).map(p => `
-    <tr><td><b>${esc(p.name)}</b></td><td>${esc(p.title)}</td><td>${p.qids.length}</td>
-    <td>${p.pick > 0 ? p.pick + ' (random)' : 'সব'}</td><td>${p.durationMin} min</td><td>${p.totalMarks}</td>
+  let dlist = [];
+  try { const dd = await getDoc(doc(db, 'settings', 'designations')); if (dd.exists()) dlist = dd.data().list || []; } catch (e) {}
+  const desOf = p => p.designation || p.name;
+  const all = ps.docs.map(d => ({id: d.id, ...d.data()}));
+  dlist = [...new Set([...dlist, ...all.map(desOf)])].sort((a, b) => a.localeCompare(b));
+  const rows = all.sort((a, b) => (desOf(a) + (a.set || '')).localeCompare(desOf(b) + (b.set || ''))).map(p => `
+    <tr><td><b>${esc(desOf(p))}</b></td><td>${p.set ? 'Set ' + esc(p.set) : '—'}</td><td>${esc(p.title)}</td><td>${p.qids.length}</td>
+    <td>${p.pick > 0 ? p.pick + ' (random)' : 'সব'}</td>
+    <td style="white-space:nowrap"><input type="number" min="1" class="tm" data-id="${esc(p.id)}" value="${p.durationMin}" style="width:70px;display:inline-block;padding:5px 8px"> min
+      <button class="sm" data-tm="${esc(p.id)}">Save</button></td><td>${p.totalMarks}</td>
     <td><span class="badge ${p.hidden ? 'b-hidden' : 'b-visible'}">${p.hidden ? 'Hidden' : 'Visible'}</span></td>
     <td style="white-space:nowrap"><a class="btn sm sec" href="#paper/${encodeURIComponent(p.id)}">Question paper</a>
       <button class="sec sm" data-hide="${esc(p.id)}" data-cur="${p.hidden ? 1 : 0}">${p.hidden ? 'Show' : 'Hide'}</button>
@@ -196,17 +203,25 @@ async function viewQuestions(){
 
   $('#view').innerHTML = `
   <div class="card"><h2>Positions / Question Sets</h2>
-    <div style="overflow-x:auto"><table><thead><tr><th>Position</th><th>Title</th><th>প্রশ্ন (pool)</th><th>প্রতি candidate কে</th><th>সময়</th><th>মোট নম্বর</th><th>Candidate দেখে?</th><th></th></tr></thead>
-    <tbody>${rows || '<tr><td colspan="8" class="muted">কোনো position নেই। নিচে Word file import করো।</td></tr>'}</tbody></table></div>
+    <div style="overflow-x:auto"><table><thead><tr><th>Designation</th><th>Set</th><th>Title</th><th>প্রশ্ন (pool)</th><th>প্রতি candidate কে</th><th>সময়</th><th>মোট নম্বর</th><th>Candidate দেখে?</th><th></th></tr></thead>
+    <tbody>${rows || '<tr><td colspan="9" class="muted">কোনো position নেই। নিচে Word file import করো।</td></tr>'}</tbody></table></div>
     <p class="muted">Hidden করলে candidate এর position তালিকায় ওই set দেখাবে না ও কেউ শুরু করতে পারবে না। আগের submission ও answer sheet ঠিকই থাকবে।</p></div>
+
+  <div class="card"><h2>Designation তালিকা</h2>
+    <p class="muted" style="margin-top:0">এখানে যোগ করলে নিচের Designation dropdown এ আসবে। dropdown এ "➕ নতুন" বেছেও সরাসরি নতুন নাম দেওয়া যায় (Save করলে নিজে থেকে তালিকায় যুক্ত হয়)।</p>
+    <div id="dchips">${dlist.map(x => `<span class="badge b-hidden" style="margin:3px;display:inline-block;font-size:13px">${esc(x)} <a href="#" data-dx="${esc(x)}" style="color:#b02a2a;text-decoration:none">✕</a></span>`).join('') || '<span class="muted">খালি</span>'}</div>
+    <div class="row" style="margin-top:8px"><div><input id="dnew" placeholder="যেমন: Field Officer"></div><div><button id="dadd">+ Add</button> <span id="dmsg"></span></div></div></div>
 
   <div class="card"><h2>নতুন Question Set যোগ করো</h2>
     <div class="row">
-      <div><label>Designation (Position) *</label><input id="pn" placeholder="যেমন: Accountant"></div>
+      <div><label>Designation *</label><select id="pn"></select>
+        <input id="pnNew" placeholder="নতুন Designation এর নাম লেখো" hidden style="margin-top:6px"></div>
+      <div><label>Set</label><select id="ps"><option value="">— Set নেই —</option>${'ABCDEFGH'.split('').map(x => `<option value="${x}">Set ${x}</option>`).join('')}</select></div>
       <div><label>সময় (মিনিট) *</label><input id="pd" type="number" min="1" placeholder="যেমন: 30"></div>
     </div>
     <label>Word file (.docx) *</label><input type="file" id="wf" accept=".docx">
     <p><button id="readBtn">Upload করো</button> <a href="question-template.docx" download class="muted">Word নমুনা ফাইল</a></p>
+    <label>Heading / নির্দেশনা (প্রশ্নের উপরে দেখাবে)</label><textarea id="phead" style="min-height:70px" placeholder="Word file এর প্রশ্নের আগের লেখা এখানে নিজে থেকে আসবে। চাইলে বদলাতে পারো।"></textarea>
     <details><summary class="muted">আরও অপশন (ঐচ্ছিক)</summary>
       <div class="row">
         <div><label>Exam title</label><input id="ptitle" placeholder="ফাঁকা = Designation এর নাম"></div>
@@ -227,6 +242,29 @@ Answer: আদর্শ উত্তর      ← ঐচ্ছিক, শুধ�
       <p class="muted">প্রশ্নের শুরুতে নম্বর (1. 2. 3. বা ১। ২।) থাকলেই হবে। Word এর নিজে-নিজে হওয়া numbering চলবে।</p></details>
   </div>`;
 
+  const setDes = v => {
+    if (v && !dlist.includes(v)) { $('#pn').value = '__new'; $('#pnNew').value = v; } else if (v) $('#pn').value = v;
+    $('#pnNew').hidden = $('#pn').value !== '__new';
+  };
+  $('#pn').innerHTML = '<option value="">— Designation বেছে নাও —</option>' + dlist.map(x => `<option value="${esc(x)}">${esc(x)}</option>`).join('') + '<option value="__new">➕ নতুন (নিজে লিখব)</option>';
+  $('#pn').onchange = () => { $('#pnNew').hidden = $('#pn').value !== '__new'; };
+  const saveList = async l => setDoc(doc(db, 'settings', 'designations'), {list: l, updatedAt: serverTimestamp()});
+  $('#dadd').onclick = async () => {
+    const v = $('#dnew').value.trim().replace(/\//g, '-');
+    if (!v) return;
+    try { await saveList([...new Set([...dlist, v])]); viewQuestions(); } catch (e) { $('#dmsg').innerHTML = '<span class="err">' + esc(e.message) + '</span>'; }
+  };
+  $('#view').querySelectorAll('[data-dx]').forEach(a => a.onclick = async ev => {
+    ev.preventDefault();
+    if (all.some(p => desOf(p) === a.dataset.dx)) return alert('এই Designation এ question set আছে, আগে সেটা মুছো।');
+    await saveList(dlist.filter(x => x !== a.dataset.dx)); viewQuestions();
+  });
+  $('#view').querySelectorAll('[data-tm]').forEach(b => b.onclick = async () => {
+    const i = $('#view').querySelector(`.tm[data-id="${CSS.escape(b.dataset.tm)}"]`), v = Math.round(Number(i.value));
+    if (!(v > 0)) return alert('সময় ঠিক নেই');
+    await updateDoc(doc(db, 'positions', b.dataset.tm), {durationMin: v, updatedAt: serverTimestamp()});
+    toast('✔ সময় ' + v + ' মিনিট করা হয়েছে (যারা আগে শুরু করেছে তাদের আগের সময়ই থাকবে)');
+  });
   $('#view').querySelectorAll('[data-hide]').forEach(b => b.onclick = async () => {
     await updateDoc(doc(db, 'positions', b.dataset.hide), {hidden: b.dataset.cur !== '1'}); viewQuestions();
   });
@@ -247,14 +285,16 @@ Answer: আদর্শ উত্তর      ← ঐচ্ছিক, শুধ�
       if (!/\.docx$/i.test(f.name)) throw new Error('শুধু .docx file চলবে। Word এ "Save As → Word Document (.docx)" করে নাও।');
       await loadJSZip();
       const text = await docxToText(await f.arrayBuffer());
-      showPreview(parseQuestions(text), new Set(ps.docs.map(d => d.id)));
+      showPreview(parseQuestions(text), new Set(ps.docs.map(d => d.id)), setDes, dlist);
     } catch (e) { msg.innerHTML = '<div class="err">পড়া যায়নি: ' + esc(e.message) + '</div>'; }
   };
 }
 
-function showPreview(parsed, existing){
+function showPreview(parsed, existing, setDes, dlist){
   const m = parsed.meta, qs = parsed.questions;
-  if (!$('#pn').value.trim() && m.position) $('#pn').value = m.position;
+  if (!$('#pn').value && m.position) setDes(m.position);
+  if (!$('#ps').value && m.set) $('#ps').value = m.set;
+  if (!$('#phead').value.trim() && parsed.heading) $('#phead').value = parsed.heading;
   if (!$('#pd').value && m.duration) $('#pd').value = m.duration;
   if (!$('#pk').value && m.pick) $('#pk').value = m.pick;
   if (!$('#ptitle').value.trim() && m.title) $('#ptitle').value = m.title;
@@ -266,28 +306,31 @@ function showPreview(parsed, existing){
     ${parsed.errors.length ? `<div class="err"><b>${parsed.errors.map(esc).join('<br>')}</b></div>`
       : `<div class="result">✔ ${qs.length} টি প্রশ্ন পাওয়া গেছে (MCQ ${mcqN}, লিখিত ${qs.length - mcqN})</div>`}
     ${parsed.warnings.length ? `<details style="margin-top:10px"><summary style="color:#b26a00">⚠ ${parsed.warnings.length} টি সতর্কতা (দেখো)</summary><ul class="muted">${parsed.warnings.map(e => `<li>${esc(e)}</li>`).join('')}</ul></details>` : ''}
+    ${parsed.heading ? `<div class="note" style="margin-top:10px"><b>Heading ধরা হয়েছে:</b><br>${esc(parsed.heading)}</div>` : ''}
     <p><button id="saveSet" ${parsed.errors.length ? 'disabled' : ''}>✔ ঠিক আছে, Save করো</button> <span id="saveMsg"></span></p>
     <details><summary>প্রশ্নগুলো দেখো</summary><div class="prev">${qHtml}</div></details>`;
 
   $('#saveSet').onclick = async () => {
     const msg = $('#saveMsg'); msg.innerHTML = '';
     try {
-      const name = $('#pn').value.trim().replace(/\//g, '-');
+      const des = ($('#pn').value === '__new' ? $('#pnNew').value : $('#pn').value).trim().replace(/\//g, '-');
+      const set = $('#ps').value, name = set ? `${des} - Set ${set}` : des;
       const dur = Math.round(Number($('#pd').value));
       let pick = Math.round(Number($('#pk').value) || 0);
-      if (!name || name === '.' || name === '..' || /^__.*__$/.test(name)) throw new Error('Position নাম ঠিক নেই');
+      if (!des || name === '.' || name === '..' || /^__.*__$/.test(name)) throw new Error('Designation বেছে নাও বা লেখো');
       if (!(dur > 0)) throw new Error('সময় (মিনিট) দাও');
       if (pick < 0 || pick >= qs.length) pick = 0;
       if (existing.has(name) && !confirm(`"${name}" আগে থেকেই আছে। নতুনটা দিয়ে বদলাবে?\n\nসাবধান: আগে কেউ এই position এ exam দিয়ে থাকলে তাদের answer sheet এ প্রশ্ন বদলে যাবে। নতুন প্রশ্নের জন্য আলাদা নাম (যেমন ${name}-2) দেওয়াই নিরাপদ।`)) return;
-      const s = splitForStorage(qs), title = $('#ptitle').value.trim() || name;
+      const s = splitForStorage(qs), title = $('#ptitle').value.trim() || des;
       $('#saveSet').disabled = true;
       // প্রশ্ন ও উত্তর আগে, position শেষে (যাতে অসম্পূর্ণ set candidate এর কাছে না যায়)
-      await setDoc(doc(db, 'questionSets', name), {title, questions: s.pub});
+      await setDoc(doc(db, 'questionSets', name), {title, heading: $('#phead').value.trim(), questions: s.pub});
       await setDoc(doc(db, 'answerKeys', name), s.key);
       await setDoc(doc(db, 'positions', name), {
-        name, title, durationMin: dur, pick, hidden: !$('#pv').checked,
+        name, designation: des, set, title, durationMin: dur, pick, hidden: !$('#pv').checked,
         qids: s.qids, optCounts: s.optCounts, totalMarks: s.totalMarks, updatedAt: serverTimestamp()
       });
+      if (!dlist.includes(des)) { try { await setDoc(doc(db, 'settings', 'designations'), {list: [...dlist, des], updatedAt: serverTimestamp()}); } catch (e) {} }
       toast('✔ "' + name + '" Save হয়েছে');
       viewQuestions();
     } catch (e) { msg.innerHTML = '<span class="err">Save হয়নি: ' + esc(e.message) + '</span>'; $('#saveSet').disabled = false; }
@@ -309,8 +352,9 @@ async function viewPaper(id){
         : `<div style="height:70px;border-bottom:1px dotted #999"></div><div style="height:30px;border-bottom:1px dotted #999"></div>${withKey && key.notes?.[q.id] ? `<div class="note"><b>Model answer:</b> ${esc(key.notes[q.id])}</div>` : ''}`}</div>`).join('');
     $('#paperHost').innerHTML = paperWrap(`
       <h2 style="text-align:center;margin:4px 0 2px">${esc(p.title)}</h2>
-      <div style="text-align:center" class="muted">Position: ${esc(p.name)} · Time: ${p.durationMin} min · Total marks: ${p.totalMarks}${p.pick > 0 ? ` · (Pool: ${qs.length} questions, ${p.pick} per candidate)` : ''}${withKey ? ' · <b>ANSWER KEY</b>' : ''}</div>
+      <div style="text-align:center" class="muted">Position: ${esc(p.designation || p.name)}${p.set ? ' · Set ' + esc(p.set) : ''} · Time: ${p.durationMin} min · Total marks: ${p.totalMarks}${p.pick > 0 ? ` · (Pool: ${qs.length} questions, ${p.pick} per candidate)` : ''}${withKey ? ' · <b>ANSWER KEY</b>' : ''}</div>
       <div class="sheet-head" style="margin:14px 0"><div>Candidate name: ____________________________</div><div>Date: ______________</div></div>
+      ${qd.data().heading ? `<div style="white-space:pre-wrap;margin:8px 0 12px;padding:10px 12px;border:1px solid #ccc;border-radius:6px">${esc(qd.data().heading)}</div>` : ''}
       ${body}`);
   };
   $('#view').innerHTML = `

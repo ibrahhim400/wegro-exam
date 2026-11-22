@@ -57,7 +57,8 @@
   <!-- Exam -->
   <section id="exam" class="screen" hidden>
     <div class="timer" id="timerBar"><span>Time left</span><span id="timer">--:--</span></div>
-    <div class="card"><h2 id="examTitle" style="margin:0"></h2></div>
+    <div class="card"><h2 id="examTitle" style="margin:0"></h2>
+      <div id="examHeadingCard" hidden style="margin-top:10px;white-space:pre-wrap"><span id="examHeading"></span></div></div>
     <div id="questions"></div>
     <div class="card"><button id="submitBtn">Submit Exam</button>
       <span class="muted" id="answered"></span> <span class="muted" id="saved"></span>
@@ -173,27 +174,31 @@ async function init(user){
 async function showStart(){
   const snap = await getDocs(query(collection(db, 'positions'), where('hidden', '==', false)));
   positions = snap.docs.map(d => ({id: d.id, ...d.data()})).filter(p => p.hidden === false && p.qids && p.qids.length)
-    .sort((a, b) => a.name.localeCompare(b.name));
+    .sort((a, b) => des(a).localeCompare(des(b)));
   if (!positions.length) return message('No exam available', 'এখন কোনো exam চালু নেই। HR এর সাথে যোগাযোগ করো।');
 
+  const names = [...new Set(positions.map(des))];
   $('sPos').innerHTML = '<option value="">— তোমার position বেছে নাও —</option>' +
-    positions.map(p => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('');
+    names.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join('');
   $('sPos').onchange = () => {
-    const p = positions.find(x => x.id === $('sPos').value);
-    $('sInfo').textContent = p ? `সময়: ${p.durationMin} মিনিট · প্রশ্ন: ${count(p)} টি` : '';
+    const g = positions.filter(x => des(x) === $('sPos').value);
+    const times = [...new Set(g.map(x => x.durationMin))];
+    $('sInfo').textContent = g.length && times.length === 1 ? `সময়: ${times[0]} মিনিট` : '';
   };
   show('start');
   $('startBtn').onclick = startExam;
 }
+const des = p => p.designation || p.name;
 const count = p => (p.pick > 0 ? Math.min(p.pick, p.qids.length) : p.qids.length);
 
 async function startExam(){
   $('startErr').textContent = '';
   const name = $('sName').value.trim();
-  const p = positions.find(x => x.id === $('sPos').value);
+  const group = positions.filter(x => des(x) === $('sPos').value);
+  const p = group.length ? group[Math.floor(Math.random() * group.length)] : null;   // একাধিক Set থাকলে random একটা
   if (name.length < 2) { $('startErr').textContent = 'তোমার নাম লেখো।'; return; }
   if (!p) { $('startErr').textContent = 'Position বেছে নাও।'; return; }
-  if (!confirm(`${p.name} এর exam এখনই শুরু হবে এবং ${p.durationMin} মিনিটের countdown চলবে। শুরু করবে?`)) return;
+  if (!confirm(`${des(p)} এর exam এখনই শুরু হবে এবং ${p.durationMin} মিনিটের countdown চলবে। শুরু করবে?`)) return;
   $('startBtn').disabled = true;
   try {
     // প্রতি candidate এর জন্য প্রশ্ন ও option এর ক্রম এলোমেলো
@@ -247,6 +252,7 @@ function runExam(){
   box.addEventListener('input', onInput);
   box.addEventListener('change', onInput);
   $('examTitle').textContent = qset.title || 'Exam';
+  $('examHeading').textContent = qset.heading || ''; $('examHeadingCard').hidden = !qset.heading;
   updateCount();
   show('exam');
 

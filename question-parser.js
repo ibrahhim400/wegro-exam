@@ -149,6 +149,7 @@ const RE_TRAIL = /\s*[\[(（]\s*(\d+(?:\.\d+)?)\s*(?:marks?|pts?|points?|নম�
 const HEADERS = [
   [/^(?:Position|Designation|Post|পদ|পদবি)\s*[:：]\s*(.+)$/i, 'position'],
   [/^Title\s*[:：]\s*(.+)$/i, 'title'],
+  [/^Set\s*[:：\-]?\s*([A-Za-z])\s*$/i, 'set'],
   [/^(?:Duration|Time)\s*[:：]\s*(\d+)/i, 'duration'],
   [/^(?:Show|Pick|Draw|Random)\s*[:：]\s*(\d+)/i, 'pick']
 ];
@@ -168,7 +169,8 @@ function matchOption(line, expected) {
 
 // যেভাবেই লেখা হোক, যতটা সম্ভব প্রশ্ন বের করে। MCQ ঠিকঠাক না হলে লিখিত প্রশ্ন ধরে (সতর্কতা সহ)।
 export function parseQuestions(raw) {
-  const res = { meta: {}, questions: [], errors: [], warnings: [] };
+  const res = { meta: {}, heading: '', questions: [], errors: [], warnings: [] };
+  const head0 = [];
   const lines = String(raw || '').split(/\r?\n/).map(cleanLine).filter(Boolean);
 
   // ১) শুরুর header (Position/Duration...) আর প্রশ্নের টুকরো ভাগ
@@ -178,17 +180,18 @@ export function parseQuestions(raw) {
     if (!cur) {
       let hit = false;
       for (const [re, key] of HEADERS) {
-        if ((m = line.match(re))) { res.meta[key] = key === 'duration' || key === 'pick' ? Number(m[1]) : m[1].trim(); hit = true; break; }
+        if ((m = line.match(re))) { res.meta[key] = key === 'set' ? m[1].toUpperCase() : key === 'duration' || key === 'pick' ? Number(m[1]) : m[1].trim(); hit = true; break; }
       }
       if (hit) continue;
     }
     if ((m = line.match(RE_Q_PREFIX)) || (m = line.match(RE_Q_PLAIN))) {
       cur = { head: m[2] || '', body: [] }; blocks.push(cur); continue;
     }
-    if (!cur) { skipped++; res.warnings.push(`প্রশ্নের আগের লাইন বাদ গেছে: "${line.slice(0, 40)}"`); continue; }
+    if (!cur) { skipped++; head0.push(line); continue; }
     cur.body.push(line);
   }
 
+  if (blocks.length) res.heading = head0.join('\n');
   // ২) কোনো নম্বর পাওয়া না গেলে প্রতিটি লাইনকে একটি লিখিত প্রশ্ন ধরি
   if (!blocks.length) {
     const rest = lines.filter(l => !HEADERS.some(([re]) => re.test(l)));
