@@ -121,19 +121,26 @@ $('sendLink').onclick = async () => {
 };
 $('logout1').onclick = () => signOut(auth).then(() => location.href = location.pathname);
 
-async function completeLinkLogin(){
-  if (!isSignInWithEmailLink(auth, location.href)) return;
-  let e = localStorage.getItem('emailForSignIn') || prompt('নিরাপত্তার জন্য তোমার email আবার দাও:');
-  try {
-    await signInWithEmailLink(auth, (e || '').trim().toLowerCase(), location.href);
-    localStorage.removeItem('emailForSignIn');
-  } catch (err) { alert('Login link কাজ করেনি বা মেয়াদ শেষ। আবার link নাও।'); }
-  history.replaceState({}, '', location.pathname);
+let linkDone = null, linkFailed = false;
+function completeLinkLogin(){
+  if (linkDone) return linkDone;                        // একবারই চলবে (দ্বিতীয়বার email চাওয়ার bug এড়াতে)
+  const href = location.href;
+  if (!isSignInWithEmailLink(auth, href)) return (linkDone = Promise.resolve());
+  history.replaceState({}, '', location.pathname);      // link এর অংশ সাথে সাথে সরাও
+  linkDone = (async () => {
+    let e = localStorage.getItem('emailForSignIn') || prompt('নিরাপত্তার জন্য তোমার email আবার দাও:');
+    try {
+      await signInWithEmailLink(auth, (e || '').trim().toLowerCase(), href);
+      localStorage.removeItem('emailForSignIn');
+    } catch (err) { linkFailed = true; }
+  })();
+  return linkDone;
 }
 
 onAuthStateChanged(auth, async () => {
   await completeLinkLogin().catch(() => {});
   const u = auth.currentUser;
+  if (!u && linkFailed) { linkFailed = false; $('logout1').textContent = 'নতুন link নাও'; return message('Login link কাজ করেনি', 'এই link আগেই ব্যবহার হয়ে গেছে বা মেয়াদ শেষ। নিচের বাটনে চেপে আবার email দিয়ে নতুন link নাও এবং শুধু একবার click করো।'); }
   if (!u) { show('login'); return; }
   const em = u.email.toLowerCase();
   if (initedFor === em) return;                       // একই user এর জন্য একবারের বেশি init না
