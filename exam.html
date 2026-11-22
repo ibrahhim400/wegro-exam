@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="bn">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -7,14 +7,14 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<header class="top"><h1 id="company">Pre-Join Exam</h1><span id="who" class="muted" style="color:#cfe0ff"></span></header>
+<header class="top"><h1 id="company">Pre-Join Exam</h1><span id="who" class="who"></span></header>
 
 <div class="wrap">
 
   <!-- Login -->
   <section id="login" class="card screen" hidden>
     <h2>Candidate Login</h2>
-    <p class="muted">তোমার registered email দাও। আমরা একটি login link পাঠাব, সেই link এ ক্লিক করলেই exam page খুলবে।</p>
+    <p class="muted">তোমার email দাও। আমরা একটি login link পাঠাব, সেই link এ ক্লিক করলেই exam page খুলবে।</p>
     <label for="email">Email</label>
     <input id="email" type="email" placeholder="you@example.com" autocomplete="email">
     <p><button id="sendLink">Send login link</button></p>
@@ -24,27 +24,31 @@
   <!-- Link sent -->
   <section id="sent" class="card screen" hidden>
     <h2>Check your email</h2>
-    <p>Login link পাঠানো হয়েছে। Inbox (এবং Spam folder) চেক করে link এ ক্লিক করো। এই একই browser এ link টি খুলতে হবে।</p>
+    <p>Login link পাঠানো হয়েছে। Inbox (না পেলে Spam folder) চেক করে link এ ক্লিক করো। এই একই browser এ link টি খুলতে হবে।</p>
   </section>
 
-  <!-- Message -->
+  <!-- Message / error -->
   <section id="msg" class="card screen" hidden>
     <h2 id="msgTitle"></h2>
     <p id="msgBody"></p>
     <button class="sec" id="logout1">Logout</button>
   </section>
 
-  <!-- Intro -->
-  <section id="intro" class="card screen" hidden>
-    <h2>Welcome, <span id="cName"></span></h2>
-    <p class="muted"><b>Position:</b> <span id="cDesig"></span></p>
-    <ul>
-      <li>মোট প্রশ্ন: <b id="iCount"></b></li>
-      <li>সময়: <b id="iDur"></b> মিনিট</li>
-      <li>Start চাপার সাথে সাথে timer শুরু হবে এবং থামানো যাবে না। Page refresh করলেও সময় চলতে থাকবে।</li>
+  <!-- Start: নাম ও position -->
+  <section id="start" class="card screen" hidden>
+    <h2>Exam শুরুর আগে</h2>
+    <label for="sName">তোমার পুরো নাম</label>
+    <input id="sName" autocomplete="name" placeholder="যেমন: Md. Rahim Uddin">
+    <label for="sPos">তোমার Position</label>
+    <select id="sPos"></select>
+    <p id="sInfo" class="muted"></p>
+    <ul class="rules">
+      <li><b>Start Exam</b> চাপার সাথে সাথে প্রশ্ন খুলবে এবং countdown শুরু হবে। Timer থামানো যাবে না।</li>
+      <li>Page refresh করলে বা browser বন্ধ করলেও সময় চলতে থাকবে।</li>
       <li>সময় শেষ হলে উত্তর নিজে থেকেই submit হয়ে যাবে।</li>
-      <li>একবার submit করলে আর পরিবর্তন করা যাবে না।</li>
-      <li>অন্য tab এ যাওয়া রেকর্ড করা হয়।</li>
+      <li>একবার submit হলে বা সময় শেষ হলে এই email বা এই device থেকে আর exam দেওয়া যাবে না।</li>
+      <li>Position একবার বেছে শুরু করলে আর বদলানো যাবে না।</li>
+      <li>অন্য tab বা window এ যাওয়া রেকর্ড করা হয়।</li>
     </ul>
     <button id="startBtn">Start Exam</button>
     <div id="startErr" class="err"></div>
@@ -53,24 +57,27 @@
   <!-- Exam -->
   <section id="exam" class="screen" hidden>
     <div class="timer" id="timerBar"><span>Time left</span><span id="timer">--:--</span></div>
+    <div class="card"><h2 id="examTitle" style="margin:0"></h2></div>
     <div id="questions"></div>
     <div class="card"><button id="submitBtn">Submit Exam</button>
-      <span class="muted" id="answered"></span><div id="subErr" class="err"></div></div>
+      <span class="muted" id="answered"></span> <span class="muted" id="saved"></span>
+      <div id="subErr" class="err"></div></div>
   </section>
 
   <!-- Done -->
   <section id="done" class="card screen" hidden>
     <h2>Exam submitted ✔</h2>
-    <p>তোমার উত্তর সফলভাবে জমা হয়েছে। ধন্যবাদ। আমরা শীঘ্রই যোগাযোগ করব।</p>
+    <p id="doneMsg">তোমার উত্তর সফলভাবে জমা হয়েছে। ধন্যবাদ। আমরা শীঘ্রই যোগাযোগ করব।</p>
+    <div id="resultBox" class="result" hidden></div>
   </section>
 </div>
 
 <script type="module">
-import {firebaseConfig, COMPANY_NAME} from "./firebase-config.js";
+import {firebaseConfig, COMPANY_NAME, NOTIFY_ACCESS_KEY} from "./firebase-config.js";
 import {initializeApp} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import {getAuth,isSignInWithEmailLink,sendSignInLinkToEmail,signInWithEmailLink,onAuthStateChanged,signOut}
   from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
-import {getFirestore,doc,getDoc,setDoc,updateDoc,serverTimestamp}
+import {getFirestore,doc,getDoc,getDocs,setDoc,updateDoc,collection,query,where,serverTimestamp}
   from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
 const app = initializeApp(firebaseConfig);
@@ -84,9 +91,22 @@ function message(t,b){ $('msgTitle').textContent=t; $('msgBody').textContent=b; 
 $('company').textContent = COMPANY_NAME + " – Pre-Join Exam";
 document.title = COMPANY_NAME + " Exam";
 
-let offset = 0, email = '', attempt = null, qset = null, answers = {}, tabSwitches = 0, timerId = null, submitting = false;
+const ALREADY = 'তুমি ইতোমধ্যে এই exam দিয়েছ (already submitted)। এই email বা এই device থেকে আর exam দেওয়া যাবে না।';
 
-// ---------- Login ----------
+let offset = 0, email = '', attempt = null, qset = null, byId = {}, settings = {}, answers = {};
+let tabSwitches = 0, timerId = null, submitting = false, dirty = false, saveTimer = null, positions = [], initedFor = '';
+
+/* ---------- device lock (এই browser এ চিহ্ন রাখা) ---------- */
+const DEV_KEY = 'wegro_exam_device';
+const devGet = () => { try { return JSON.parse(localStorage.getItem(DEV_KEY) || 'null'); } catch (e) { return null; } };
+const devSet = v => { try { localStorage.setItem(DEV_KEY, JSON.stringify(v)); } catch (e) {} };
+const devClear = () => { try { localStorage.removeItem(DEV_KEY); } catch (e) {} };
+
+/* ---------- random ---------- */
+function rnd(n){ const a = new Uint32Array(1); crypto.getRandomValues(a); return a[0] % n; }
+function shuffle(arr){ const a = [...arr]; for (let i = a.length - 1; i > 0; i--) { const j = rnd(i + 1); [a[i], a[j]] = [a[j], a[i]]; } return a; }
+
+/* ---------- Login ---------- */
 $('sendLink').onclick = async () => {
   const e = $('email').value.trim().toLowerCase();
   $('loginErr').textContent = '';
@@ -109,79 +129,134 @@ async function completeLinkLogin(){
   history.replaceState({}, '', location.pathname);
 }
 
-onAuthStateChanged(auth, async user => {
-  await completeLinkLogin().catch(()=>{});
+onAuthStateChanged(auth, async () => {
+  await completeLinkLogin().catch(() => {});
   const u = auth.currentUser;
   if (!u) { show('login'); return; }
+  const em = u.email.toLowerCase();
+  if (initedFor === em) return;                       // একই user এর জন্য একবারের বেশি init না
+  initedFor = em;
   init(u).catch(err => message('Error', err.message));
 });
 
-// ---------- Init ----------
+/* ---------- Init ---------- */
 async function init(user){
   email = user.email.toLowerCase();
   $('who').textContent = email;
 
-  const cand = await getDoc(doc(db, 'candidates', email));
-  if (!cand.exists()) return message('Not registered', 'এই email দিয়ে কোনো exam নির্ধারিত নেই। HR এর সাথে যোগাযোগ করো।');
-  const c = cand.data();
+  try { const s = await getDoc(doc(db, 'settings', 'main')); if (s.exists()) settings = s.data(); } catch (e) {}
+  const lock = settings.deviceLock !== false;
+  const dev = lock ? devGet() : null;
+  if (dev && dev.email !== email) return message('Already submitted', ALREADY);
 
-  // server সময়ের সাথে client এর পার্থক্য
+  // server সময়ের সাথে device এর ঘড়ির পার্থক্য
   await setDoc(doc(db, 'pings', email), {t: serverTimestamp()});
   const p = await getDoc(doc(db, 'pings', email));
   offset = p.data().t.toMillis() - Date.now();
 
   const at = await getDoc(doc(db, 'attempts', email));
-  if (at.exists() && at.data().status === 'submitted')
-    return message('Already submitted', 'তুমি ইতোমধ্যে এই exam জমা দিয়েছ।');
+  if (!at.exists()) {
+    if (dev && dev.email === email) devClear();        // admin Reset করলে আবার সুযোগ
+    return showStart();
+  }
+  attempt = at.data();
+  if (lock) devSet({email, at: Date.now()});
+  if (attempt.status === 'submitted') return message('Already submitted', ALREADY);
 
-  const qs = await getDoc(doc(db, 'questionSets', c.designation));
-  if (!qs.exists()) return message('Not ready', 'তোমার position এর প্রশ্ন এখনও প্রস্তুত হয়নি। HR এর সাথে যোগাযোগ করো।');
-  qset = qs.data();
+  const endMs = attempt.startedAt.toMillis() + attempt.durationMin * 60000;
+  if (Date.now() + offset >= endMs) return message('Time over', 'তোমার exam এর সময় শেষ হয়ে গেছে। ' + ALREADY);
 
-  if (at.exists()) { attempt = at.data(); return runExam(); }
-
-  $('cName').textContent = c.name; $('cDesig').textContent = c.designation;
-  $('iCount').textContent = qset.questions.length; $('iDur').textContent = qset.durationMin;
-  show('intro');
-
-  $('startBtn').onclick = async () => {
-    $('startBtn').disabled = true; $('startErr').textContent = '';
-    try {
-      await setDoc(doc(db, 'attempts', email), {
-        name: c.name, email, designation: c.designation, durationMin: qset.durationMin,
-        startedAt: serverTimestamp(), status: 'started', answers: {}
-      });
-      attempt = (await getDoc(doc(db, 'attempts', email))).data();
-      runExam();
-    } catch (err) { $('startErr').textContent = 'Start করা যায়নি: ' + err.message; $('startBtn').disabled = false; }
-  };
+  await loadQuestions();
+  runExam();
 }
 
-// ---------- Exam ----------
+/* ---------- Start (position বেছে নেওয়া) ---------- */
+async function showStart(){
+  const snap = await getDocs(query(collection(db, 'positions'), where('hidden', '==', false)));
+  positions = snap.docs.map(d => ({id: d.id, ...d.data()})).filter(p => p.hidden === false && p.qids && p.qids.length)
+    .sort((a, b) => a.name.localeCompare(b.name));
+  if (!positions.length) return message('No exam available', 'এখন কোনো exam চালু নেই। HR এর সাথে যোগাযোগ করো।');
+
+  $('sPos').innerHTML = '<option value="">— তোমার position বেছে নাও —</option>' +
+    positions.map(p => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('');
+  $('sPos').onchange = () => {
+    const p = positions.find(x => x.id === $('sPos').value);
+    $('sInfo').textContent = p ? `সময়: ${p.durationMin} মিনিট · প্রশ্ন: ${count(p)} টি` : '';
+  };
+  show('start');
+  $('startBtn').onclick = startExam;
+}
+const count = p => (p.pick > 0 ? Math.min(p.pick, p.qids.length) : p.qids.length);
+
+async function startExam(){
+  $('startErr').textContent = '';
+  const name = $('sName').value.trim();
+  const p = positions.find(x => x.id === $('sPos').value);
+  if (name.length < 2) { $('startErr').textContent = 'তোমার নাম লেখো।'; return; }
+  if (!p) { $('startErr').textContent = 'Position বেছে নাও।'; return; }
+  if (!confirm(`${p.name} এর exam এখনই শুরু হবে এবং ${p.durationMin} মিনিটের countdown চলবে। শুরু করবে?`)) return;
+  $('startBtn').disabled = true;
+  try {
+    // প্রতি candidate এর জন্য প্রশ্ন ও option এর ক্রম এলোমেলো
+    const order = shuffle(p.qids).slice(0, count(p));
+    const optionOrder = {};
+    order.forEach(id => { const n = p.optCounts && p.optCounts[id]; if (n) optionOrder[id] = shuffle([...Array(n).keys()]); });
+    await setDoc(doc(db, 'attempts', email), {
+      name, email, designation: p.id, durationMin: p.durationMin,
+      startedAt: serverTimestamp(), status: 'started', answers: {}, order, optionOrder
+    });
+    if (settings.deviceLock !== false) devSet({email, at: Date.now()});
+    attempt = (await getDoc(doc(db, 'attempts', email))).data();
+    await loadQuestions();
+    runExam();
+  } catch (err) {
+    $('startErr').textContent = 'Start করা যায়নি: ' + err.message;
+    $('startBtn').disabled = false;
+  }
+}
+
+async function loadQuestions(){
+  const s = await getDoc(doc(db, 'questionSets', attempt.designation));
+  if (!s.exists()) throw new Error('প্রশ্ন পাওয়া যায়নি। HR এর সাথে যোগাযোগ করো।');
+  qset = s.data(); byId = {};
+  qset.questions.forEach(q => byId[q.id] = q);
+}
+
+/* ---------- Exam ---------- */
 function runExam(){
-  answers = JSON.parse(localStorage.getItem('ans_' + email) || '{}');
-  tabSwitches = Number(localStorage.getItem('tab_' + email) || 0);
+  const order = (attempt.order && attempt.order.length ? attempt.order : qset.questions.map(q => q.id)).filter(id => byId[id]);
+  let local = {};
+  try { local = JSON.parse(localStorage.getItem('ans_' + email) || '{}'); } catch (e) {}
+  answers = {...(attempt.answers || {}), ...local};
+  tabSwitches = Math.max(Number(attempt.tabSwitches || 0), Number(localStorage.getItem('tab_' + email) || 0));
+
   const box = $('questions'); box.innerHTML = '';
-  qset.questions.forEach((q, i) => {
+  order.forEach((id, i) => {
+    const q = byId[id];
     const d = document.createElement('div'); d.className = 'q';
     let body = '';
     if (q.type === 'mcq') {
-      body = q.options.map((o, k) =>
-        `<label class="opt"><input type="radio" name="${esc(q.id)}" value="${k}" ${answers[q.id] === k ? 'checked' : ''}><span>${esc(o)}</span></label>`).join('');
+      const oo = (attempt.optionOrder && attempt.optionOrder[id]) || q.options.map((_, k) => k);
+      body = oo.map(k =>
+        `<label class="opt"><input type="radio" name="${esc(id)}" value="${k}" ${answers[id] === k ? 'checked' : ''}><span>${esc(q.options[k])}</span></label>`).join('');
     } else {
-      body = `<textarea data-q="${esc(q.id)}" placeholder="তোমার উত্তর লেখো...">${esc(answers[q.id] || '')}</textarea>`;
+      body = `<textarea data-q="${esc(id)}" placeholder="তোমার উত্তর লেখো...">${esc(answers[id] || '')}</textarea>`;
     }
     d.innerHTML = `<div class="qt">${i + 1}. ${esc(q.text)} <span class="muted">(${esc(q.marks)} marks)</span></div>${body}`;
     box.appendChild(d);
   });
   box.addEventListener('input', onInput);
   box.addEventListener('change', onInput);
+  $('examTitle').textContent = qset.title || 'Exam';
   updateCount();
   show('exam');
+
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden && !submitting) { tabSwitches++; localStorage.setItem('tab_' + email, tabSwitches); }
+    if (document.hidden && !submitting) { tabSwitches++; try { localStorage.setItem('tab_' + email, tabSwitches); } catch (e) {} markDirty(); }
   });
   window.addEventListener('beforeunload', e => { if (!submitting) { e.preventDefault(); e.returnValue = ''; } });
+  setInterval(save, 20000);
+
   const endMs = attempt.startedAt.toMillis() + attempt.durationMin * 60000;
   const tick = () => {
     const left = endMs - (Date.now() + offset);
@@ -197,34 +272,90 @@ function onInput(e){
   const t = e.target;
   if (t.type === 'radio') answers[t.name] = Number(t.value);
   else if (t.dataset.q) answers[t.dataset.q] = t.value;
-  localStorage.setItem('ans_' + email, JSON.stringify(answers));
-  updateCount();
+  try { localStorage.setItem('ans_' + email, JSON.stringify(answers)); } catch (err) {}
+  updateCount(); markDirty();
 }
 function updateCount(){
-  const n = qset.questions.filter(q => answers[q.id] !== undefined && answers[q.id] !== '').length;
-  $('answered').textContent = `  Answered ${n} / ${qset.questions.length}`;
+  const ids = (attempt.order && attempt.order.length ? attempt.order : qset.questions.map(q => q.id)).filter(id => byId[id]);
+  const n = ids.filter(id => answers[id] !== undefined && answers[id] !== '').length;
+  $('answered').textContent = `Answered ${n} / ${ids.length}`;
 }
 
+/* ---------- auto-save (browser বন্ধ হলেও উত্তর server এ থাকে) ---------- */
+function markDirty(){ dirty = true; clearTimeout(saveTimer); saveTimer = setTimeout(save, 2500); }
+async function save(){
+  if (!dirty || submitting) return;
+  dirty = false;
+  try {
+    await updateDoc(doc(db, 'attempts', email), {answers, tabSwitches});
+    $('saved').textContent = '· saved ' + new Date().toLocaleTimeString();
+  } catch (e) { dirty = true; }
+}
+
+/* ---------- Submit ---------- */
 $('submitBtn').onclick = () => { if (confirm('Submit করলে আর পরিবর্তন করা যাবে না। নিশ্চিত?')) submit(false); };
 
 async function submit(auto){
   if (submitting) return; submitting = true;
   $('submitBtn').disabled = true; $('subErr').textContent = 'Submitting...';
-  clearInterval(timerId);
+  clearInterval(timerId); clearTimeout(saveTimer);
   for (let i = 0; i < 4; i++) {
     try {
       await updateDoc(doc(db, 'attempts', email), {
         answers, status: 'submitted', submittedAt: serverTimestamp(), tabSwitches
       });
-      localStorage.removeItem('ans_' + email); localStorage.removeItem('tab_' + email);
-      show('done'); return;
+      try { localStorage.removeItem('ans_' + email); localStorage.removeItem('tab_' + email); } catch (e) {}
+      if (settings.deviceLock !== false) devSet({email, at: Date.now()});
+      notify(auto);
+      return showDone(auto);
     } catch (err) {
-      $('subErr').textContent = 'Submit এ সমস্যা, আবার চেষ্টা হচ্ছে... (' + err.code + ')';
+      $('subErr').textContent = 'Submit এ সমস্যা, আবার চেষ্টা হচ্ছে... (' + (err.code || err.message) + ')';
       await new Promise(r => setTimeout(r, 1500));
     }
   }
   $('subErr').textContent = 'Submit হয়নি। Internet চেক করে আবার Submit চাপো।';
   submitting = false; $('submitBtn').disabled = false;
+}
+
+async function showDone(auto){
+  show('done');
+  if (auto) $('doneMsg').textContent = 'সময় শেষ হয়ে যাওয়ায় তোমার উত্তর নিজে থেকেই জমা হয়েছে। ধন্যবাদ।';
+  if (settings.showResult === false) return;         // HR চাইলে Settings এ বন্ধ রাখতে পারে
+  try {
+    const k = await getDoc(doc(db, 'answerKeys', attempt.designation));
+    if (!k.exists()) return;
+    const key = k.data().answers || {};
+    const ids = (attempt.order && attempt.order.length ? attempt.order : qset.questions.map(q => q.id)).filter(id => byId[id]);
+    let got = 0, max = 0, written = 0;
+    ids.forEach(id => {
+      const q = byId[id];
+      if (q.type === 'mcq') { max += Number(q.marks) || 0; if (answers[id] !== undefined && answers[id] === key[id]) got += Number(q.marks) || 0; }
+      else written++;
+    });
+    $('resultBox').hidden = false;
+    $('resultBox').innerHTML = `<div>MCQ score: <b>${got} / ${max}</b></div>` +
+      (written ? `<div class="muted">লিখিত ${written} টি প্রশ্ন HR মূল্যায়ন করবে।</div>` : '');
+  } catch (e) { /* score দেখানো না গেলেও submit ঠিক আছে */ }
+}
+
+/* ---------- HR কে email নোটিফিকেশন (Web3Forms) ---------- */
+async function notify(auto){
+  if (!NOTIFY_ACCESS_KEY) return;
+  try {
+    await fetch('https://api.web3forms.com/submit', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'Accept': 'application/json'},
+      body: JSON.stringify({
+        access_key: NOTIFY_ACCESS_KEY,
+        subject: `New exam submission: ${attempt.name} (${attempt.designation})`,
+        from_name: COMPANY_NAME + ' Exam System',
+        name: attempt.name, email: email,
+        message: `Candidate: ${attempt.name}\nEmail: ${email}\nPosition: ${attempt.designation}\n` +
+          `Submitted: ${new Date().toLocaleString()}${auto ? ' (auto-submitted, time over)' : ''}\n` +
+          `Tab switches: ${tabSwitches}\n\nAnswer sheet: ${location.href.split('?')[0].replace('exam.html', 'admin.html')}#sheet/${encodeURIComponent(email)}`
+      })
+    });
+  } catch (e) { /* নোটিফিকেশন না গেলেও submit ঠিক আছে; admin panel এ সব দেখা যাবে */ }
 }
 </script>
 </body>

@@ -1,3 +1,4 @@
+// Firebase config (তোমার project এর)
 export const firebaseConfig = {
   apiKey: "AIzaSyD9nbHPTtZ2pIV61n1FM16EDN1-c5-Av1c",
   authDomain: "wegro-global-online-exam.firebaseapp.com",
@@ -8,3 +9,7 @@ export const firebaseConfig = {
 };
 
 export const COMPANY_NAME = "WeGro Global";
+
+// কেউ exam submit করলে HR এর email এ নোটিফিকেশন পাঠাতে (ঐচ্ছিক)।
+// https://web3forms.com থেকে নেওয়া Access Key এখানে বসাও। ফাঁকা থাকলে email যাবে না।
+export const NOTIFY_ACCESS_KEY = "";

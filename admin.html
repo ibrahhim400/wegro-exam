@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="bn">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -8,7 +8,7 @@
 </head>
 <body>
 <header class="top"><h1 id="company">Exam Admin</h1>
-  <span><span id="adminEmail" style="color:#cfe0ff"></span> <button class="sec sm" id="logout" hidden>Logout</button></span></header>
+  <span><span id="adminEmail" class="who"></span> <button class="sec sm" id="logout" hidden>Logout</button></span></header>
 
 <div class="wrap wide">
 
@@ -22,19 +22,21 @@
 
   <div id="app" hidden>
     <div class="tabs noprint" id="tabs">
-      <a href="#candidates" data-t="candidates">Candidates</a>
+      <a href="#subs" data-t="subs">Submissions</a>
       <a href="#questions" data-t="questions">Question Sets</a>
+      <a href="#settings" data-t="settings">Settings</a>
     </div>
     <div id="view"></div>
   </div>
 </div>
 
 <script type="module">
-import {firebaseConfig, COMPANY_NAME} from "./firebase-config.js";
+import {firebaseConfig, COMPANY_NAME, NOTIFY_ACCESS_KEY} from "./firebase-config.js";
+import {parseQuestions, splitForStorage, docxToText} from "./question-parser.js";
 import {initializeApp} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import {getAuth,signInWithEmailAndPassword,onAuthStateChanged,signOut}
   from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
-import {getFirestore,doc,getDoc,getDocs,setDoc,updateDoc,deleteDoc,collection,serverTimestamp}
+import {getFirestore,doc,getDoc,getDocs,setDoc,updateDoc,deleteDoc,collection,onSnapshot,serverTimestamp}
   from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
 const app = initializeApp(firebaseConfig);
@@ -42,10 +44,11 @@ const auth = getAuth(app);
 const db = getFirestore(app);
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const fmt = ts => ts ? ts.toDate().toLocaleString() : '—';
+const fmt = ts => ts && ts.toDate ? ts.toDate().toLocaleString() : '—';
+const ms = ts => ts && ts.toMillis ? ts.toMillis() : 0;
 $('#company').textContent = COMPANY_NAME + ' – Exam Admin';
 
-// ---------- Auth ----------
+/* ---------- Auth ---------- */
 $('#loginBtn').onclick = async () => {
   $('#loginErr').textContent = '';
   try { await signInWithEmailAndPassword(auth, $('#aEmail').value.trim(), $('#aPass').value); }
@@ -60,174 +63,322 @@ onAuthStateChanged(auth, async user => {
   if (!ok) { await signOut(auth); $('#loginErr').textContent = 'এই account admin না।'; return; }
   $('#login').hidden = true; $('#app').hidden = false; $('#logout').hidden = false;
   $('#adminEmail').textContent = user.email;
+  watchSubmissions();
   route();
 });
 window.addEventListener('hashchange', () => auth.currentUser && route());
 
 function route(){
-  const h = location.hash.slice(1) || 'candidates';
+  const h = location.hash.slice(1) || 'subs';
   const [page, arg] = h.split('/');
+  window.onbeforeprint = null;
   document.querySelectorAll('#tabs a').forEach(a => a.classList.toggle('on', a.dataset.t === page));
-  $('#tabs').hidden = (page === 'sheet');
+  $('#tabs').hidden = (page === 'sheet' || page === 'paper');
+  const a = decodeURIComponent(arg || '');
   if (page === 'questions') viewQuestions();
-  else if (page === 'sheet') viewSheet(decodeURIComponent(arg || ''));
-  else viewCandidates();
+  else if (page === 'settings') viewSettings();
+  else if (page === 'sheet') viewSheet(a);
+  else if (page === 'paper') viewPaper(a);
+  else viewSubs();
 }
 
-const score = (qset, key, att) => {
-  let total = 0, max = 0;
-  qset.questions.forEach(q => {
-    max += Number(q.marks) || 0;
-    if (q.type === 'mcq') { if (att.answers?.[q.id] === key?.answers?.[q.id] && att.answers?.[q.id] !== undefined) total += Number(q.marks) || 0; }
-    else total += Number(att.grading?.[q.id]) || 0;
-  });
-  return {total, max};
-};
+/* ---------- সাধারণ helper ---------- */
+const F = {q: '', p: '', s: ''};
+const STATUS_LABEL = {submitted: 'Submitted', started: 'In progress', timeout: 'Time over'};
+function statusOf(a){
+  if (a.status === 'submitted') return 'submitted';
+  return Date.now() > ms(a.startedAt) + a.durationMin * 60000 + 90000 ? 'timeout' : 'started';
+}
 
-// ---------- Candidates ----------
-async function viewCandidates(){
+// একটি attempt এর নম্বর হিসাব (MCQ নিজে, লিখিত admin এর দেওয়া)
+function calc(att, qset, key){
+  const order = (att.order && att.order.length ? att.order : qset.questions.map(q => q.id));
+  const byId = Object.fromEntries(qset.questions.map(q => [q.id, q]));
+  const ids = order.filter(id => byId[id]);
+  let mcq = 0, mcqMax = 0, wr = 0, wrMax = 0, pending = false;
+  for (const id of ids) {
+    const q = byId[id], m = Number(q.marks) || 0;
+    if (q.type === 'mcq') { mcqMax += m; if (att.answers?.[id] !== undefined && att.answers[id] === key?.answers?.[id]) mcq += m; }
+    else {
+      wrMax += m;
+      const g = att.grading?.[id];
+      if (g === undefined) { if (att.answers?.[id]) pending = true; } else wr += Number(g) || 0;
+    }
+  }
+  return {mcq, mcqMax, wr, wrMax, pending, total: mcq + wr, max: mcqMax + wrMax, ids, byId};
+}
+
+// Letterhead এর উপর পেপার (screen এ উপরের band, print এ পুরো A4 letterhead)
+const paperWrap = inner => `<div class="paper">
+  <img class="lh-full" src="letterhead.jpg" alt=""><img class="lh-top" src="letterhead-top.jpg" alt="">
+  <table class="pt"><thead><tr><td></td></tr></thead><tfoot><tr><td></td></tr></tfoot>
+  <tbody><tr><td>${inner}</td></tr></tbody></table></div>`;
+
+function loadJSZip(){
+  return new Promise((res, rej) => {
+    if (window.JSZip) return res();
+    const s = document.createElement('script');
+    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js';
+    s.onload = res; s.onerror = () => rej(new Error('JSZip লোড হয়নি (internet চেক করো)'));
+    document.head.appendChild(s);
+  });
+}
+
+/* =================================================================
+   Submissions
+================================================================= */
+async function viewSubs(){
   $('#view').innerHTML = '<div class="card">Loading...</div>';
-  const [cs, qs, as] = await Promise.all([
-    getDocs(collection(db, 'candidates')), getDocs(collection(db, 'questionSets')), getDocs(collection(db, 'attempts'))]);
-  const attempts = {}; as.forEach(d => attempts[d.id] = d.data());
-  const desigs = qs.docs.map(d => d.id);
-  const examUrl = location.href.split('#')[0].replace('admin.html', 'exam.html');
-  const rows = cs.docs.map(d => d.data()).sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0)).map(c => {
-    const a = attempts[c.email];
-    const st = a ? a.status : 'none';
-    const label = st === 'none' ? 'Not started' : st === 'started' ? 'In progress' : 'Submitted';
-    return `<tr><td>${esc(c.name)}</td><td>${esc(c.email)}</td><td>${esc(c.designation)}</td>
-      <td><span class="badge b-${st}">${label}</span></td>
-      <td>${a?.totalScore !== undefined ? esc(a.totalScore) + ' / ' + esc(a.maxScore) : '—'}</td>
-      <td>${fmt(a?.submittedAt)}</td>
-      <td>${a ? `<a class="btn sm" href="#sheet/${encodeURIComponent(c.email)}">Answer sheet</a>` : ''}
-        ${a ? `<button class="sec sm" data-act="reset" data-id="${esc(c.email)}">Reset</button>` : ''}
-        <button class="danger sm" data-act="del" data-id="${esc(c.email)}">Remove</button></td></tr>`;
-  }).join('');
-  $('#view').innerHTML = `
-  <div class="card"><h2>Add Candidate</h2>
-    ${desigs.length ? `<div class="row">
-      <div><label>Name</label><input id="cn"></div>
-      <div><label>Email</label><input id="ce" type="email"></div>
-      <div><label>Designation</label><select id="cd">${desigs.map(x => `<option>${esc(x)}</option>`).join('')}</select></div>
-      <div><button id="addC">Add</button></div></div>
-      <div id="addMsg"></div>
-      <p class="muted">Exam link (candidate কে পাঠাও): <b>${esc(examUrl)}</b></p>`
-    : '<p class="muted">আগে "Question Sets" ট্যাবে অন্তত একটি প্রশ্নসেট import করো।</p>'}
-  </div>
-  <div class="card"><h2>Candidates (${cs.size})</h2>
-    <div style="overflow-x:auto"><table><tr><th>Name</th><th>Email</th><th>Designation</th><th>Status</th><th>Score</th><th>Submitted</th><th></th></tr>${rows || '<tr><td colspan=7>কেউ নেই</td></tr>'}</table></div></div>`;
+  const [as, qs, ks] = await Promise.all([
+    getDocs(collection(db, 'attempts')), getDocs(collection(db, 'questionSets')), getDocs(collection(db, 'answerKeys'))]);
+  const qsets = {}, keys = {};
+  qs.forEach(d => qsets[d.id] = d.data()); ks.forEach(d => keys[d.id] = d.data());
+  const list = as.docs.map(d => ({id: d.id, ...d.data()})).sort((a, b) => ms(b.startedAt) - ms(a.startedAt));
+  const desigs = [...new Set(list.map(a => a.designation))].sort();
 
-  const add = $('#addC');
-  if (add) add.onclick = async () => {
-    const name = $('#cn').value.trim(), em = $('#ce').value.trim().toLowerCase(), de = $('#cd').value;
-    if (!name || !em) { $('#addMsg').innerHTML = '<div class="err">নাম ও email দাও।</div>'; return; }
-    await setDoc(doc(db, 'candidates', em), {name, email: em, designation: de, createdAt: serverTimestamp()});
-    viewCandidates();
+  $('#view').innerHTML = `
+  <div class="card"><h2>Submissions (<span id="cnt">${list.length}</span>)</h2>
+    <div class="row noprint">
+      <div><label>Search</label><input id="fq" placeholder="নাম বা email"></div>
+      <div><label>Position</label><select id="fp"><option value="">সব</option>${desigs.map(d => `<option>${esc(d)}</option>`).join('')}</select></div>
+      <div><label>Status</label><select id="fs"><option value="">সব</option><option value="submitted">Submitted</option><option value="started">In progress</option><option value="timeout">Time over</option></select></div>
+    </div>
+    <div style="overflow-x:auto;margin-top:10px"><table>
+      <thead><tr><th>Name</th><th>Email</th><th>Position</th><th>Status</th><th>Started</th><th>Submitted</th><th>Score</th><th></th></tr></thead>
+      <tbody id="rows"></tbody></table></div></div>`;
+
+  const scoreCell = a => {
+    const q = qsets[a.designation];
+    if (!q || statusOf(a) === 'started') return '—';
+    const c = calc(a, q, keys[a.designation]);
+    return c.pending ? `${c.mcq} / ${c.mcqMax} MCQ <span class="muted">· লিখিত বাকি</span>` : `<b>${c.total} / ${c.max}</b>`;
   };
-  $('#view').querySelectorAll('[data-act]').forEach(b => b.onclick = async () => {
-    const id = b.dataset.id;
-    if (b.dataset.act === 'reset') {
-      if (confirm(id + ' এর attempt মুছে আবার exam দেওয়ার সুযোগ দেবে?')) { await deleteDoc(doc(db, 'attempts', id)); viewCandidates(); }
-    } else if (confirm(id + ' কে তালিকা থেকে সরাবে?')) { await deleteDoc(doc(db, 'candidates', id)); viewCandidates(); }
-  });
+  const draw = () => {
+    const q = $('#fq').value.trim().toLowerCase(), p = $('#fp').value, s = $('#fs').value;
+    F.q = $('#fq').value; F.p = p; F.s = s;
+    const rows = list.filter(a => (!q || (a.name + ' ' + a.email).toLowerCase().includes(q)) && (!p || a.designation === p) && (!s || statusOf(a) === s));
+    $('#cnt').textContent = rows.length;
+    $('#rows').innerHTML = rows.map(a => { const st = statusOf(a);
+      return `<tr><td>${esc(a.name)}</td><td>${esc(a.email)}</td><td>${esc(a.designation)}</td>
+      <td><span class="badge b-${st}">${STATUS_LABEL[st]}</span></td>
+      <td>${fmt(a.startedAt)}</td><td>${fmt(a.submittedAt)}</td><td>${scoreCell(a)}</td>
+      <td style="white-space:nowrap"><a class="btn sm" href="#sheet/${encodeURIComponent(a.id)}">Answer sheet</a>
+        <button class="sec sm" data-reset="${esc(a.id)}">Reset</button></td></tr>`; }).join('')
+      || '<tr><td colspan="8" class="muted">কিছু নেই</td></tr>';
+    $('#rows').querySelectorAll('[data-reset]').forEach(b => b.onclick = async () => {
+      if (confirm(b.dataset.reset + ' এর attempt ও উত্তর মুছে আবার exam দেওয়ার সুযোগ দেবে?\n(মুছলে আর ফেরত পাবে না)')) {
+        await deleteDoc(doc(db, 'attempts', b.dataset.reset)); viewSubs();
+      }
+    });
+  };
+  $('#fq').value = F.q; $('#fp').value = F.p; $('#fs').value = F.s;
+  ['#fq', '#fp', '#fs'].forEach(s => $(s).oninput = draw);
+  draw();
 }
 
-// ---------- Question sets ----------
+/* =================================================================
+   Question Sets (= Position)
+================================================================= */
 async function viewQuestions(){
   $('#view').innerHTML = '<div class="card">Loading...</div>';
-  const qs = await getDocs(collection(db, 'questionSets'));
-  const rows = qs.docs.map(d => { const q = d.data();
-    return `<tr><td>${esc(d.id)}</td><td>${esc(q.title)}</td><td>${q.questions.length}</td><td>${esc(q.durationMin)} min</td>
-    <td><button class="danger sm" data-del="${esc(d.id)}">Delete</button></td></tr>`; }).join('');
+  const ps = await getDocs(collection(db, 'positions'));
+  const rows = ps.docs.map(d => ({id: d.id, ...d.data()})).sort((a, b) => a.name.localeCompare(b.name)).map(p => `
+    <tr><td><b>${esc(p.name)}</b></td><td>${esc(p.title)}</td><td>${p.qids.length}</td>
+    <td>${p.pick > 0 ? p.pick + ' (random)' : 'সব'}</td><td>${p.durationMin} min</td><td>${p.totalMarks}</td>
+    <td><span class="badge ${p.hidden ? 'b-hidden' : 'b-visible'}">${p.hidden ? 'Hidden' : 'Visible'}</span></td>
+    <td style="white-space:nowrap"><a class="btn sm sec" href="#paper/${encodeURIComponent(p.id)}">Question paper</a>
+      <button class="sec sm" data-hide="${esc(p.id)}" data-cur="${p.hidden ? 1 : 0}">${p.hidden ? 'Show' : 'Hide'}</button>
+      <button class="danger sm" data-del="${esc(p.id)}">Delete</button></td></tr>`).join('');
+
   $('#view').innerHTML = `
-  <div class="card"><h2>Question Sets</h2>
-    <table><tr><th>Designation</th><th>Title</th><th>Questions</th><th>Duration</th><th></th></tr>${rows || '<tr><td colspan=5>কোনো সেট নেই</td></tr>'}</table></div>
-  <div class="card"><h2>Import / Update Question Set (JSON)</h2>
-    <p class="muted">একই designation এ আবার import করলে আগের সেট replace হবে। Designation এ "/" ব্যবহার করো না। Format এর জন্য sample-questions.json দেখো।</p>
-    <textarea id="json" style="min-height:260px;font-family:monospace" placeholder='{"designation":"Accountant","title":"...","durationMin":30,"questions":[...]}'></textarea>
-    <p><button id="imp">Import</button></p><div id="impMsg"></div></div>`;
+  <div class="card"><h2>Positions / Question Sets</h2>
+    <div style="overflow-x:auto"><table><thead><tr><th>Position</th><th>Title</th><th>প্রশ্ন (pool)</th><th>প্রতি candidate কে</th><th>সময়</th><th>মোট নম্বর</th><th>Candidate দেখে?</th><th></th></tr></thead>
+    <tbody>${rows || '<tr><td colspan="8" class="muted">কোনো position নেই। নিচে Word file import করো।</td></tr>'}</tbody></table></div>
+    <p class="muted">Hidden করলে candidate এর position তালিকায় ওই set দেখাবে না ও কেউ শুরু করতে পারবে না। আগের submission ও answer sheet ঠিকই থাকবে।</p></div>
+
+  <div class="card"><h2>Word file থেকে প্রশ্ন import</h2>
+    <p class="muted"><a href="question-template.docx" download>Word template ডাউনলোড করো</a>, ওতে প্রশ্ন বসিয়ে এখানে upload করো। Upload করলে আগে preview দেখাবে, তুমি ঠিক আছে দেখে Save করবে।</p>
+    <details><summary>Word এ কীভাবে লিখবে?</summary>
+<pre>Position: Accountant            (ঐচ্ছিক, না দিলে নিচে নিজে লিখবে)
+Title: Accountant Pre-Join Exam (ঐচ্ছিক)
+Duration: 30                    (মিনিট, ঐচ্ছিক)
+Show: 20                        (ঐচ্ছিক: প্রতি candidate কে pool থেকে ২০টি random প্রশ্ন)
+
+Q1. Which is a current asset? [2]      ← [2] = নম্বর (না দিলে ১)
+A. Land
+B. Cash in hand
+C. Long-term loan
+D. Goodwill
+Answer: B                              ← MCQ তে সঠিক উত্তর, একটিই অক্ষর
+
+Q2. Explain trial balance. [10]        ← option না থাকলে লিখিত প্রশ্ন
+Answer: (ঐচ্ছিক) মূল্যায়নকারীর জন্য আদর্শ উত্তর, candidate দেখবে না</pre>
+      <p class="muted">• প্রশ্ন Q1. বা 1. দিয়ে শুরু, option A. B. C. D. (বা ক. খ. গ. ঘ.)। Word এর নিজে-নিজে হওয়া numbering/bullet চললেও চলবে।<br>
+      • শুধু লেখা পড়া হয়, ছবি/টেবিলের ছবি বাদ যায়।</p></details>
+    <label>Word file (.docx)</label><input type="file" id="wf" accept=".docx">
+    <details><summary>অথবা সরাসরি লেখা paste করো</summary><textarea id="pt" style="min-height:160px" placeholder="Q1. ..."></textarea></details>
+    <p><button id="readBtn">Read &amp; Preview</button></p>
+    <div id="readMsg"></div><div id="prev" class="prev"></div></div>`;
+
+  $('#view').querySelectorAll('[data-hide]').forEach(b => b.onclick = async () => {
+    await updateDoc(doc(db, 'positions', b.dataset.hide), {hidden: b.dataset.cur !== '1'}); viewQuestions();
+  });
   $('#view').querySelectorAll('[data-del]').forEach(b => b.onclick = async () => {
-    if (confirm(b.dataset.del + ' সেট মুছবে?')) {
-      await deleteDoc(doc(db, 'questionSets', b.dataset.del)); await deleteDoc(doc(db, 'answerKeys', b.dataset.del)); viewQuestions();
+    if (confirm(`"${b.dataset.del}" মুছবে?\nএই position এ যারা exam দিয়েছে তাদের answer sheet এ প্রশ্ন আর দেখা যাবে না। শুধু লুকাতে চাইলে Hide ব্যবহার করো।`)) {
+      await deleteDoc(doc(db, 'positions', b.dataset.del));
+      await deleteDoc(doc(db, 'questionSets', b.dataset.del));
+      await deleteDoc(doc(db, 'answerKeys', b.dataset.del));
+      viewQuestions();
     }
   });
-  $('#imp').onclick = async () => {
-    const msg = $('#impMsg');
+
+  $('#readBtn').onclick = async () => {
+    const msg = $('#readMsg'); msg.innerHTML = ''; $('#prev').innerHTML = '';
     try {
-      const j = JSON.parse($('#json').value);
-      if (!j.designation || j.designation.includes('/')) throw new Error('designation ঠিক নেই');
-      if (!(Number(j.durationMin) > 0)) throw new Error('durationMin দাও');
-      if (!Array.isArray(j.questions) || !j.questions.length) throw new Error('questions খালি');
-      const ids = new Set(), pub = [], key = {};
-      j.questions.forEach((q, i) => {
-        if (!q.id || ids.has(q.id)) throw new Error('প্রশ্ন ' + (i + 1) + ': id নেই বা duplicate');
-        ids.add(q.id);
-        if (q.type === 'mcq') {
-          if (!Array.isArray(q.options) || q.options.length < 2 || !Number.isInteger(q.answer) || q.answer < 0 || q.answer >= q.options.length)
-            throw new Error(q.id + ': options/answer ঠিক নেই');
-          key[q.id] = q.answer;
-          pub.push({id: q.id, type: 'mcq', text: q.text, options: q.options, marks: Number(q.marks) || 1});
-        } else if (q.type === 'text') pub.push({id: q.id, type: 'text', text: q.text, marks: Number(q.marks) || 1});
-        else throw new Error(q.id + ': type হবে mcq বা text');
-      });
-      await setDoc(doc(db, 'questionSets', j.designation), {title: j.title || j.designation, durationMin: Number(j.durationMin), questions: pub});
-      await setDoc(doc(db, 'answerKeys', j.designation), {answers: key});
-      viewQuestions();
-    } catch (e) { msg.innerHTML = '<div class="err">Import ব্যর্থ: ' + esc(e.message) + '</div>'; }
+      const f = $('#wf').files[0]; let text = $('#pt').value;
+      if (f) { await loadJSZip(); text = await docxToText(await f.arrayBuffer()); }
+      else if (!text.trim()) throw new Error('Word file বেছে নাও অথবা লেখা paste করো');
+      showPreview(parseQuestions(text), new Set(ps.docs.map(d => d.id)));
+    } catch (e) { msg.innerHTML = '<div class="err">পড়া যায়নি: ' + esc(e.message) + '</div>'; }
   };
 }
 
-// ---------- Answer sheet ----------
+function showPreview(parsed, existing){
+  const m = parsed.meta, qs = parsed.questions;
+  const mcqN = qs.filter(q => q.type === 'mcq').length, total = qs.reduce((s, q) => s + q.marks, 0);
+  const qHtml = qs.map((q, i) => `<div class="q"><div class="qt">${i + 1}. ${esc(q.text)} <span class="muted">(${q.marks} marks · ${q.type === 'mcq' ? 'MCQ' : 'লিখিত'})</span></div>
+    ${q.type === 'mcq' ? q.options.map((o, k) => `<div class="${k === q.answer ? 'good' : ''}" style="white-space:pre-wrap">${'ABCDEFGHIJ'[k]}. ${esc(o)} ${k === q.answer ? '✔' : ''}</div>`).join('')
+      : (q.note ? `<div class="note"><b>Model answer:</b> ${esc(q.note)}</div>` : '<div class="muted">(লিখিত উত্তর)</div>')}</div>`).join('');
+  $('#prev').innerHTML = `
+    ${parsed.errors.length ? `<div class="err"><b>ঠিক করতে হবে:</b><ul>${parsed.errors.map(e => `<li>${esc(e)}</li>`).join('')}</ul>Word file ঠিক করে আবার upload করো।</div>` : ''}
+    ${parsed.warnings.length ? `<div class="muted" style="color:#b26a00"><b>সতর্কতা:</b><ul>${parsed.warnings.map(e => `<li>${esc(e)}</li>`).join('')}</ul></div>` : ''}
+    <h3>Preview: ${qs.length} টি প্রশ্ন (MCQ ${mcqN}, লিখিত ${qs.length - mcqN}) · মোট নম্বর ${total}</h3>
+    <div class="row">
+      <div><label>Position নাম (candidate এটাই দেখবে)</label><input id="pn" value="${esc(m.position || '')}"></div>
+      <div><label>Exam title</label><input id="ptitle" value="${esc(m.title || '')}" placeholder="ঐচ্ছিক"></div>
+      <div><label>সময় (মিনিট)</label><input id="pd" type="number" min="1" value="${m.duration || ''}"></div>
+      <div><label>প্রতি candidate কে কয়টি প্রশ্ন (random)</label><input id="pk" type="number" min="0" max="${qs.length}" value="${m.pick || ''}" placeholder="ফাঁকা = সবগুলো"></div>
+    </div>
+    <label class="inline"><input type="checkbox" id="pv" checked> Candidate দের তালিকায় দেখাও (Visible)</label>
+    <p><button id="saveSet" ${parsed.errors.length ? 'disabled' : ''}>Save position</button> <span id="saveMsg"></span></p>
+    ${qHtml}`;
+
+  $('#saveSet').onclick = async () => {
+    const msg = $('#saveMsg'); msg.innerHTML = '';
+    try {
+      const name = $('#pn').value.trim().replace(/\//g, '-');
+      const dur = Math.round(Number($('#pd').value));
+      let pick = Math.round(Number($('#pk').value) || 0);
+      if (!name || name === '.' || name === '..' || /^__.*__$/.test(name)) throw new Error('Position নাম ঠিক নেই');
+      if (!(dur > 0)) throw new Error('সময় (মিনিট) দাও');
+      if (pick < 0 || pick >= qs.length) pick = 0;
+      if (existing.has(name) && !confirm(`"${name}" আগে থেকেই আছে। নতুনটা দিয়ে বদলাবে?\n\nসাবধান: আগে কেউ এই position এ exam দিয়ে থাকলে তাদের answer sheet এ প্রশ্ন বদলে যাবে। নতুন প্রশ্নের জন্য আলাদা নাম (যেমন ${name}-2) দেওয়াই নিরাপদ।`)) return;
+      const s = splitForStorage(qs), title = $('#ptitle').value.trim() || name;
+      $('#saveSet').disabled = true;
+      // প্রশ্ন ও উত্তর আগে, position শেষে (যাতে অসম্পূর্ণ set candidate এর কাছে না যায়)
+      await setDoc(doc(db, 'questionSets', name), {title, questions: s.pub});
+      await setDoc(doc(db, 'answerKeys', name), s.key);
+      await setDoc(doc(db, 'positions', name), {
+        name, title, durationMin: dur, pick, hidden: !$('#pv').checked,
+        qids: s.qids, optCounts: s.optCounts, totalMarks: s.totalMarks, updatedAt: serverTimestamp()
+      });
+      viewQuestions();
+    } catch (e) { msg.innerHTML = '<span class="err">Save হয়নি: ' + esc(e.message) + '</span>'; $('#saveSet').disabled = false; }
+  };
+}
+
+/* =================================================================
+   প্রশ্নপত্র (Letterhead এ ছাপার জন্য)
+================================================================= */
+async function viewPaper(id){
+  $('#view').innerHTML = '<div class="card">Loading...</div>';
+  const [pd, qd, kd] = await Promise.all([getDoc(doc(db, 'positions', id)), getDoc(doc(db, 'questionSets', id)), getDoc(doc(db, 'answerKeys', id))]);
+  if (!pd.exists() || !qd.exists()) { $('#view').innerHTML = '<div class="card">পাওয়া যায়নি। <a href="#questions">Back</a></div>'; return; }
+  const p = pd.data(), qs = qd.data().questions, key = kd.exists() ? kd.data() : {answers: {}, notes: {}};
+
+  const draw = withKey => {
+    const body = qs.map((q, i) => `<div class="q"><div class="qt">${i + 1}. ${esc(q.text)} <span class="muted">(${q.marks} marks)</span></div>
+      ${q.type === 'mcq' ? q.options.map((o, k) => `<div style="white-space:pre-wrap;${withKey && k === key.answers[q.id] ? 'font-weight:700' : ''}">${'ABCDEFGHIJ'[k]}. ${esc(o)}${withKey && k === key.answers[q.id] ? ' ✔' : ''}</div>`).join('')
+        : `<div style="height:70px;border-bottom:1px dotted #999"></div><div style="height:30px;border-bottom:1px dotted #999"></div>${withKey && key.notes?.[q.id] ? `<div class="note"><b>Model answer:</b> ${esc(key.notes[q.id])}</div>` : ''}`}</div>`).join('');
+    $('#paperHost').innerHTML = paperWrap(`
+      <h2 style="text-align:center;margin:4px 0 2px">${esc(p.title)}</h2>
+      <div style="text-align:center" class="muted">Position: ${esc(p.name)} · Time: ${p.durationMin} min · Total marks: ${p.totalMarks}${p.pick > 0 ? ` · (Pool: ${qs.length} questions, ${p.pick} per candidate)` : ''}${withKey ? ' · <b>ANSWER KEY</b>' : ''}</div>
+      <div class="sheet-head" style="margin:14px 0"><div>Candidate name: ____________________________</div><div>Date: ______________</div></div>
+      ${body}`);
+  };
+  $('#view').innerHTML = `
+    <div class="noprint" style="margin-top:16px"><a class="btn sec" href="#questions">← Back</a>
+      <button id="print">Print / Save as PDF</button>
+      <label class="inline" style="display:inline-flex;margin-left:14px"><input type="checkbox" id="wk"> উত্তরসহ (Answer key)</label></div>
+    <div id="paperHost"></div>`;
+  draw(false);
+  $('#wk').onchange = () => draw($('#wk').checked);
+  $('#print').onclick = () => window.print();
+}
+
+/* =================================================================
+   Answer sheet (প্রতি candidate আলাদা, Letterhead এ)
+================================================================= */
 async function viewSheet(id){
   $('#view').innerHTML = '<div class="card">Loading...</div>';
-  const [as, cs] = await Promise.all([getDoc(doc(db, 'attempts', id)), getDoc(doc(db, 'candidates', id))]);
-  if (!as.exists()) { $('#view').innerHTML = '<div class="card">Attempt পাওয়া যায়নি। <a href="#candidates">Back</a></div>'; return; }
-  const att = as.data(), c = cs.exists() ? cs.data() : {name: att.name, email: id, designation: att.designation};
+  const as = await getDoc(doc(db, 'attempts', id));
+  if (!as.exists()) { $('#view').innerHTML = '<div class="card">Attempt পাওয়া যায়নি। <a href="#subs">Back</a></div>'; return; }
+  const att = as.data();
   const [qd, kd] = await Promise.all([getDoc(doc(db, 'questionSets', att.designation)), getDoc(doc(db, 'answerKeys', att.designation))]);
-  const qset = qd.data(), key = kd.exists() ? kd.data() : {answers: {}};
-  const sc = score(qset, key, att);
+  if (!qd.exists()) { $('#view').innerHTML = '<div class="card">এই position এর প্রশ্নসেট মুছে ফেলা হয়েছে, তাই answer sheet বানানো যাচ্ছে না। <a href="#subs">Back</a></div>'; return; }
+  const qset = qd.data(), key = kd.exists() ? kd.data() : {answers: {}, notes: {}};
+  const c = calc(att, qset, key), st = statusOf(att);
+  const taken = att.submittedAt ? Math.max(0, Math.round((ms(att.submittedAt) - ms(att.startedAt)) / 60000)) + ' min' : '—';
 
-  const qHtml = qset.questions.map((q, i) => {
-    const a = att.answers?.[q.id];
+  const qHtml = c.ids.map((qid, i) => {
+    const q = c.byId[qid], a = att.answers?.[qid];
+    const head = `<div class="qt">${i + 1}. ${esc(q.text)} <span class="muted">(${q.marks} marks)</span></div>`;
     if (q.type === 'mcq') {
-      const right = a === key.answers[q.id];
-      return `<div class="q"><div class="qt">${i + 1}. ${esc(q.text)} <span class="muted">(${q.marks} marks)</span></div>
-        <div>Candidate answer: <b>${a === undefined ? '<i>Not answered</i>' : esc(q.options[a])}</b>
+      const right = a !== undefined && a === key.answers?.[qid];
+      return `<div class="q">${head}
+        <div>Candidate answer: <b>${a === undefined || !q.options[a] ? '<i>Not answered</i>' : esc(q.options[a])}</b>
         <span class="${right ? 'right' : 'wrong'}">${right ? '✔ Correct' : '✘ Wrong'}</span></div>
-        ${right ? '' : `<div class="muted">Correct answer: ${esc(q.options[key.answers[q.id]])}</div>`}
+        ${right ? '' : `<div class="muted">Correct answer: ${esc(q.options[key.answers?.[qid]] ?? '—')}</div>`}
         <div class="muted">Marks: ${right ? q.marks : 0} / ${q.marks}</div></div>`;
     }
-    return `<div class="q"><div class="qt">${i + 1}. ${esc(q.text)} <span class="muted">(${q.marks} marks)</span></div>
-      <div style="white-space:pre-wrap;background:#f7f8fb;padding:10px;border-radius:8px">${a ? esc(a) : '<i>Not answered</i>'}</div>
-      <div style="margin-top:8px">Marks: <input type="number" class="gm" data-q="${esc(q.id)}" data-max="${q.marks}" min="0" max="${q.marks}" step="0.5"
-        value="${att.grading?.[q.id] ?? ''}" style="width:90px"> / ${q.marks}</div></div>`;
+    return `<div class="q">${head}
+      <div class="ans">${a ? esc(a) : '<i>Not answered</i>'}</div>
+      ${key.notes?.[qid] ? `<div class="note noprint"><b>Model answer (শুধু admin):</b> ${esc(key.notes[qid])}</div>` : ''}
+      <div style="margin-top:8px">Marks: <span class="noprint"><input type="number" class="gm" data-q="${esc(qid)}" data-max="${q.marks}" min="0" max="${q.marks}" step="0.5"
+        value="${att.grading?.[qid] ?? ''}" style="width:90px"></span><b class="printonly-i gmv" data-q="${esc(qid)}">${att.grading?.[qid] ?? 0}</b> / ${q.marks}</div></div>`;
   }).join('');
 
   $('#view').innerHTML = `
-  <div class="noprint" style="margin-top:16px"><a class="btn sec" href="#candidates">← Back</a>
+  <div class="noprint" style="margin-top:16px"><a class="btn sec" href="#subs">← Back</a>
     <button id="print">Print / Save as PDF</button></div>
-  <div class="card">
-    <div class="printonly"><h2 style="text-align:center">${esc(COMPANY_NAME)} – Pre-Join Exam Answer Sheet</h2></div>
-    <div class="sheet-head"><div><h2 style="margin-bottom:4px">${esc(c.name)}</h2>
-      <div>${esc(c.email)}</div><div>Position: <b>${esc(att.designation)}</b></div></div>
+  <div id="paperHost">${paperWrap(`
+    <h2 style="text-align:center;margin:4px 0 2px">${esc(COMPANY_NAME)} – Pre-Join Exam Answer Sheet</h2>
+    <div style="text-align:center" class="muted">${esc(qset.title || att.designation)}</div>
+    <div class="sheet-head" style="margin-top:14px"><div><h3 style="margin:0 0 4px">${esc(att.name)}</h3>
+      <div>${esc(att.email)}</div><div>Position: <b>${esc(att.designation)}</b></div></div>
       <div style="text-align:right"><div>Started: ${fmt(att.startedAt)}</div><div>Submitted: ${fmt(att.submittedAt)}</div>
-      <div>Duration allowed: ${att.durationMin} min</div>
-      <div>Tab switches: ${att.tabSwitches ?? 0}</div><div>Status: <b>${esc(att.status)}</b></div></div></div>
-    <h3>Total: <span id="total">${sc.total}</span> / ${sc.max}</h3>
-    ${att.status !== 'submitted' ? '<div class="err">এই candidate এখনও submit করেনি।</div>' : ''}
+      <div>Time allowed: ${att.durationMin} min · Taken: ${taken}</div>
+      <div>Tab switches: ${att.tabSwitches ?? 0}</div><div>Status: <b>${STATUS_LABEL[st]}</b></div></div></div>
+    ${st !== 'submitted' ? `<div class="err">${st === 'timeout' ? 'Candidate submit করেনি, সময় শেষ হয়ে গেছে। শেষ auto-save হওয়া উত্তর দেখানো হচ্ছে।' : 'Candidate এখনও exam দিচ্ছে।'}</div>` : ''}
+    <div class="score"><div>MCQ: <b>${c.mcq} / ${c.mcqMax}</b></div><div>Written: <b id="wtot">${c.wr} / ${c.wrMax}</b></div><div>Total: <b id="total">${c.total} / ${c.max}</b></div></div>
     ${qHtml}
-    <div style="margin-top:16px"><label>Remarks</label>
+    <div style="margin-top:16px"><label class="noprint">Remarks</label>
       <textarea id="remarks" class="noprint">${esc(att.remarks || '')}</textarea>
-      <div class="printonly" style="white-space:pre-wrap"><b>Remarks:</b> ${esc(att.remarks || '')}</div></div>
+      <div class="printonly" style="white-space:pre-wrap"><b>Remarks:</b> <span id="remv">${esc(att.remarks || '')}</span></div></div>
     <div class="noprint" style="margin-top:12px"><button id="save">Save marks</button> <span id="saveMsg"></span></div>
-    <div class="sig printonly"><div>Candidate</div><div>Evaluator</div></div>
-  </div>`;
+    <div class="sig printonly"><div>Candidate</div><div>Evaluator</div></div>`)}</div>`;
 
-  const mcqTotal = qset.questions.filter(q => q.type === 'mcq' && att.answers?.[q.id] === key.answers[q.id]).reduce((s, q) => s + (Number(q.marks) || 0), 0);
-  const recalc = () => { let t = mcqTotal; document.querySelectorAll('.gm').forEach(i => t += Number(i.value) || 0); $('#total').textContent = t; return t; };
+  const recalc = () => {
+    let w = 0; document.querySelectorAll('.gm').forEach(i => w += Number(i.value) || 0);
+    $('#wtot').textContent = `${w} / ${c.wrMax}`; $('#total').textContent = `${c.mcq + w} / ${c.max}`; return c.mcq + w;
+  };
   document.querySelectorAll('.gm').forEach(i => i.oninput = recalc);
-  $('#print').onclick = () => window.print();
+  const sync = () => {
+    document.querySelectorAll('.gm').forEach(i => { const v = document.querySelector(`.gmv[data-q="${i.dataset.q}"]`); if (v) v.textContent = i.value || 0; });
+    $('#remv').textContent = $('#remarks').value;
+  };
+  window.onbeforeprint = sync;
+  $('#print').onclick = () => { sync(); window.print(); };
   $('#save').onclick = async () => {
     const grading = {};
     for (const i of document.querySelectorAll('.gm')) {
@@ -236,10 +387,62 @@ async function viewSheet(id){
       grading[i.dataset.q] = v;
     }
     const t = recalc();
-    await updateDoc(doc(db, 'attempts', id), {grading, remarks: $('#remarks').value, totalScore: t, maxScore: sc.max, gradedAt: serverTimestamp()});
+    await updateDoc(doc(db, 'attempts', id), {grading, remarks: $('#remarks').value, totalScore: t, maxScore: c.max, gradedAt: serverTimestamp()});
     $('#saveMsg').innerHTML = '<span class="ok">Saved ✔</span>';
   };
 }
+
+/* =================================================================
+   Settings
+================================================================= */
+async function viewSettings(){
+  $('#view').innerHTML = '<div class="card">Loading...</div>';
+  let s = {};
+  try { const d = await getDoc(doc(db, 'settings', 'main')); if (d.exists()) s = d.data(); } catch (e) {}
+  $('#view').innerHTML = `
+  <div class="card"><h2>Settings</h2>
+    <label class="inline"><input type="checkbox" id="sr" ${s.showResult !== false ? 'checked' : ''}> Submit করার পর candidate কে তার MCQ score দেখাও</label>
+    <p class="muted" style="margin-top:0">চালু থাকলে (ডিফল্ট) submit করার পর candidate নিজের MCQ score দেখবে। লিখিত প্রশ্নের নম্বর কখনো দেখানো হয় না। সতর্কতা: এটা চালু থাকলে সঠিক উত্তরের তালিকা submit হওয়া candidate রা কারিগরি ভাবে পড়তে পারে, তাই পরের candidate দের সাথে শেয়ার হওয়ার ঝুঁকি থাকে। একই প্রশ্ন বারবার ব্যবহার করলে এটা বন্ধ রাখো।</p>
+    <label class="inline"><input type="checkbox" id="dl" ${s.deviceLock !== false ? 'checked' : ''}> Device lock: যে browser/device থেকে exam দেওয়া হয়েছে সেখান থেকে অন্য email দিয়ে আবার দেওয়া যাবে না</label>
+    <p class="muted" style="margin-top:0">অফিসের একটাই কম্পিউটারে একের পর এক candidate কে exam দেওয়ালে এটা বন্ধ রাখো (নইলে দ্বিতীয় জন আটকে যাবে)। একই email এ দ্বিতীয়বার exam দেওয়া সবসময় বন্ধ থাকে।</p>
+    <p><button id="saveS">Save settings</button> <span id="sMsg"></span></p>
+    <hr style="border:0;border-top:1px solid var(--line)">
+    <p><b>Email নোটিফিকেশন:</b> ${NOTIFY_ACCESS_KEY ? '<span class="ok">চালু আছে</span>' : '<span class="err">বন্ধ</span> (firebase-config.js এ NOTIFY_ACCESS_KEY বসাতে হবে, README দেখো)'}</p>
+  </div>`;
+  $('#saveS').onclick = async () => {
+    try {
+      await setDoc(doc(db, 'settings', 'main'), {showResult: $('#sr').checked, deviceLock: $('#dl').checked, updatedAt: serverTimestamp()});
+      $('#sMsg').innerHTML = '<span class="ok">Saved ✔</span>';
+    } catch (e) { $('#sMsg').innerHTML = '<span class="err">Save হয়নি: ' + esc(e.message) + '</span>'; }
+  };
+}
+
+/* =================================================================
+   নতুন submission এর alert (panel খোলা থাকলে)
+================================================================= */
+function toast(msg){
+  const t = document.createElement('div'); t.className = 'toast'; t.textContent = msg;
+  document.body.appendChild(t);
+  setTimeout(() => t.remove(), 9000);
+}
+let watching = false, lastStatus = null;
+function watchSubmissions(){
+  if (watching) return; watching = true;
+  onSnapshot(collection(db, 'attempts'), snap => {
+    const now = {};
+    snap.forEach(d => now[d.id] = d.data().status);
+    if (lastStatus) {
+      let n = 0;
+      snap.docChanges().forEach(ch => {
+        const d = ch.doc.data();
+        if (d.status === 'submitted' && lastStatus[ch.doc.id] !== 'submitted') { n++; toast('📥 নতুন submission: ' + d.name + ' (' + d.designation + ')'); }
+      });
+      if (n && (location.hash.slice(1) || 'subs').split('/')[0] === 'subs') viewSubs();
+    }
+    lastStatus = now;
+  }, () => {});
+}
+
 </script>
 </body>
 </html>
