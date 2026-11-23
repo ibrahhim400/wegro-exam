@@ -269,10 +269,8 @@ Answer: আদর্শ উত্তর      ← ঐচ্ছিক, শুধ�
     await updateDoc(doc(db, 'positions', b.dataset.hide), {hidden: b.dataset.cur !== '1'}); viewQuestions();
   });
   $('#view').querySelectorAll('[data-del]').forEach(b => b.onclick = async () => {
-    if (confirm(`"${b.dataset.del}" মুছবে?\nএই position এ যারা exam দিয়েছে তাদের answer sheet এ প্রশ্ন আর দেখা যাবে না। শুধু লুকাতে চাইলে Hide ব্যবহার করো।`)) {
-      await deleteDoc(doc(db, 'positions', b.dataset.del));
-      await deleteDoc(doc(db, 'questionSets', b.dataset.del));
-      await deleteDoc(doc(db, 'answerKeys', b.dataset.del));
+    if (confirm(`"${b.dataset.del}" তালিকা থেকে মুছবে?\nCandidate রা আর এটা পাবে না, কিন্তু যারা আগে exam দিয়েছে তাদের answer sheet ঠিক থাকবে (প্রশ্ন সংরক্ষিত থাকে)।`)) {
+      await deleteDoc(doc(db, 'positions', b.dataset.del));      // শুধু তালিকা/candidate দিক থেকে সরে; প্রশ্ন ও উত্তরমালা থাকে
       viewQuestions();
     }
   });
@@ -285,7 +283,7 @@ Answer: আদর্শ উত্তর      ← ঐচ্ছিক, শুধ�
       if (!/\.docx$/i.test(f.name)) throw new Error('শুধু .docx file চলবে। Word এ "Save As → Word Document (.docx)" করে নাও।');
       await loadJSZip();
       const text = await docxToText(await f.arrayBuffer());
-      showPreview(parseQuestions(text), new Set(ps.docs.map(d => d.id)), setDes, dlist);
+      showPreview(parseQuestions(text), new Set([...ps.docs.map(d => d.id), ...(await getDocs(collection(db, 'questionSets'))).docs.map(d => d.id)]), setDes, dlist);
     } catch (e) { msg.innerHTML = '<div class="err">পড়া যায়নি: ' + esc(e.message) + '</div>'; }
   };
 }
