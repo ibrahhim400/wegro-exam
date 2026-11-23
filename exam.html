@@ -49,7 +49,7 @@
       <li>Page refresh করলে বা browser বন্ধ করলেও সময় চলতে থাকবে।</li>
       <li>সময় শেষ হলে উত্তর নিজে থেকেই submit হয়ে যাবে।</li>
       <li>একবার submit হলে বা সময় শেষ হলে এই email বা এই device থেকে আর exam দেওয়া যাবে না।</li>
-      <li>Position একবার বেছে শুরু করলে আর বদলানো যাবে না।</li>
+      <li>Start করার আগে তোমার Position ঠিক আছে কিনা ভালো করে দেখে নাও। ভুল Position বেছে শুরু করে ফেললে সাথে সাথে HR কে জানাও, HR নতুন করে exam শুরু করার সুযোগ দেবে।</li>
       <li>অন্য tab বা window এ যাওয়া রেকর্ড করা হয়।</li>
     </ul>
     <button id="startBtn">Start Exam</button>
@@ -215,7 +215,7 @@ async function startExam(){
   const phone = $('sPhone').value.trim();
   if (!/^\+?[0-9][0-9\s-]{8,17}$/.test(phone)) { $('startErr').textContent = 'সঠিক ফোন নাম্বার লেখো।'; return; }
   if (!p) { $('startErr').textContent = 'Position বেছে নাও।'; return; }
-  if (!confirm(`${des(p)} এর exam এখনই শুরু হবে এবং ${p.durationMin} মিনিটের countdown চলবে। শুরু করবে?`)) return;
+  if (!confirm(`${des(p)} এর exam এখনই শুরু হবে এবং ${p.durationMin} মিনিটের countdown চলবে। শুরু করবে?\n\nPosition ঠিক আছে তো? শুরু করার পর নিজে বদলানো যাবে না।`)) return;
   $('startBtn').disabled = true;
   try {
     // প্রতি candidate এর জন্য প্রশ্ন ও option এর ক্রম এলোমেলো
