@@ -79,6 +79,7 @@ function route(){
   else if (page === 'settings') viewSettings();
   else if (page === 'sheet') viewSheet(a);
   else if (page === 'paper') viewPaper(a);
+  else if (page === 'edit') viewEdit(a);
   else viewSubs();
 }
 
@@ -197,7 +198,8 @@ async function viewQuestions(){
     <td style="white-space:nowrap"><input type="number" min="1" class="tm" data-id="${esc(p.id)}" value="${p.durationMin}" style="width:70px;display:inline-block;padding:5px 8px"> min
       <button class="sm" data-tm="${esc(p.id)}">Save</button></td><td>${p.totalMarks}</td>
     <td><span class="badge ${p.hidden ? 'b-hidden' : 'b-visible'}">${p.hidden ? 'Hidden' : 'Visible'}</span></td>
-    <td style="white-space:nowrap"><a class="btn sm sec" href="#paper/${encodeURIComponent(p.id)}">Question paper</a>
+    <td style="white-space:nowrap"><a class="btn sm" href="#edit/${encodeURIComponent(p.id)}">Edit</a>
+      <a class="btn sm sec" href="#paper/${encodeURIComponent(p.id)}">Question paper</a>
       <button class="sec sm" data-hide="${esc(p.id)}" data-cur="${p.hidden ? 1 : 0}">${p.hidden ? 'Show' : 'Hide'}</button>
       <button class="danger sm" data-del="${esc(p.id)}">Delete</button></td></tr>`).join('');
 
@@ -332,6 +334,101 @@ function showPreview(parsed, existing, setDes, dlist){
       toast('✔ "' + name + '" Save হয়েছে');
       viewQuestions();
     } catch (e) { msg.innerHTML = '<span class="err">Save হয়নি: ' + esc(e.message) + '</span>'; $('#saveSet').disabled = false; }
+  };
+}
+
+
+/* =================================================================
+   প্রশ্নসেট Edit (upload এর পরে হাতে ঠিক করা)
+================================================================= */
+async function viewEdit(id){
+  $('#view').innerHTML = '<div class="card">Loading...</div>';
+  const [pd, qd, kd] = await Promise.all([getDoc(doc(db, 'positions', id)), getDoc(doc(db, 'questionSets', id)), getDoc(doc(db, 'answerKeys', id))]);
+  if (!pd.exists() || !qd.exists()) { $('#view').innerHTML = '<div class="card">পাওয়া যায়নি। <a href="#questions">Back</a></div>'; return; }
+  const p = pd.data(), set = qd.data(), key = kd.exists() ? kd.data() : {answers: {}, notes: {}};
+  const Q = set.questions.map(q => ({id: q.id, type: q.type === 'mcq' ? 'mcq' : 'text', text: q.text, marks: q.marks,
+    options: q.options ? [...q.options] : ['', '', '', ''], answer: key.answers?.[q.id] ?? 0, note: key.notes?.[q.id] || ''}));
+  const L = 'ABCDEFGHIJ';
+  const ansOpts = q => q.options.map((o, k) => `<option value="${k}" ${q.answer === k ? 'selected' : ''}>${L[k]}</option>`).join('');
+  const draw = () => {
+    $('#qlist').innerHTML = Q.map((q, i) => `<div class="q" data-i="${i}">
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;justify-content:space-between">
+        <b>প্রশ্ন ${i + 1}</b>
+        <span><button class="sec sm" data-act="up" ${i === 0 ? 'disabled' : ''}>↑</button> <button class="sec sm" data-act="down" ${i === Q.length - 1 ? 'disabled' : ''}>↓</button>
+        <button class="danger sm" data-act="del">মুছো</button></span></div>
+      <div class="row"><div><label>ধরন</label><select data-f="type"><option value="mcq" ${q.type === 'mcq' ? 'selected' : ''}>MCQ</option><option value="text" ${q.type === 'text' ? 'selected' : ''}>লিখিত</option></select></div>
+        <div><label>নম্বর</label><input type="number" min="0.5" step="0.5" data-f="marks" value="${q.marks}"></div></div>
+      <label>প্রশ্ন</label><textarea data-f="text" style="min-height:70px">${esc(q.text)}</textarea>
+      ${q.type === 'mcq' ? `<label>Option (প্রতি লাইনে একটি)</label><textarea data-f="options" style="min-height:90px">${esc(q.options.join('\n'))}</textarea>
+        <label>সঠিক উত্তর</label><select data-f="answer" style="width:auto">${ansOpts(q)}</select>`
+      : `<label>আদর্শ উত্তর (ঐচ্ছিক, শুধু তুমি দেখবে)</label><textarea data-f="note" style="min-height:60px">${esc(q.note)}</textarea>`}
+    </div>`).join('') || '<div class="muted">কোনো প্রশ্ন নেই</div>';
+  };
+  $('#view').innerHTML = `
+  <div class="noprint" style="margin-top:16px"><a class="btn sec" href="#questions">← Back</a></div>
+  <div class="card"><h2>Edit: ${esc(p.designation || p.name)}${p.set ? ' · Set ' + esc(p.set) : ''}</h2>
+    <div class="row">
+      <div><label>Exam title</label><input id="et" value="${esc(set.title || '')}"></div>
+      <div><label>সময় (মিনিট)</label><input id="ed" type="number" min="1" value="${p.durationMin}"></div>
+      <div><label>প্রতি candidate কে কয়টি (random, ফাঁকা = সব)</label><input id="ek" type="number" min="0" value="${p.pick || ''}"></div>
+    </div>
+    <label>Heading / নির্দেশনা</label><textarea id="eh" style="min-height:70px">${esc(set.heading || '')}</textarea>
+    <p class="muted">সতর্কতা: যারা আগে exam দিয়েছে তাদের answer sheet এও এই বদল দেখা যাবে। তাই যে প্রশ্নের উত্তর কেউ দিয়ে ফেলেছে সেখানে option এর ক্রম বদলিও না বা প্রশ্ন মুছো না; শুধু বানান/লেখা ঠিক করা নিরাপদ।</p></div>
+  <div id="qlist"></div>
+  <div class="card"><button class="sec" id="addM">+ MCQ প্রশ্ন</button> <button class="sec" id="addT">+ লিখিত প্রশ্ন</button>
+    <p><button id="eSave">✔ Save করো</button> <span id="eMsg"></span></p></div>`;
+  draw();
+  const L2 = $('#qlist');
+  const card = e => { const c = e.target.closest('.q'); return c ? Q[Number(c.dataset.i)] : null; };
+  L2.addEventListener('input', e => {
+    const q = card(e), f = e.target.dataset.f; if (!q || !f) return;
+    if (f === 'marks') q.marks = Number(e.target.value);
+    else if (f === 'options') { q.options = e.target.value.split('\n'); const sel = e.target.closest('.q').querySelector('[data-f=answer]'); if (sel) { sel.innerHTML = ansOpts(q); } }
+    else if (f === 'answer') q.answer = Number(e.target.value);
+    else q[f] = e.target.value;
+  });
+  L2.addEventListener('change', e => {
+    const q = card(e), f = e.target.dataset.f; if (!q) return;
+    if (f === 'type') { q.type = e.target.value; if (q.type === 'mcq' && q.options.filter(o => o.trim()).length < 2) q.options = ['', '', '', '']; draw(); }
+  });
+  L2.addEventListener('click', e => {
+    const b = e.target.closest('[data-act]'); if (!b) return;
+    const i = Number(b.closest('.q').dataset.i);
+    if (b.dataset.act === 'del') { if (!confirm('প্রশ্ন ' + (i + 1) + ' মুছবে?')) return; Q.splice(i, 1); }
+    else if (b.dataset.act === 'up' && i > 0) [Q[i - 1], Q[i]] = [Q[i], Q[i - 1]];
+    else if (b.dataset.act === 'down' && i < Q.length - 1) [Q[i + 1], Q[i]] = [Q[i], Q[i + 1]];
+    draw();
+  });
+  const add = type => { const n = Math.max(0, ...Q.map(q => Number(String(q.id).replace(/\D/g, '')) || 0)) + 1;
+    Q.push({id: 'q' + n, type, text: '', marks: 1, options: ['', '', '', ''], answer: 0, note: ''}); draw(); L2.lastElementChild.scrollIntoView(); };
+  $('#addM').onclick = () => add('mcq'); $('#addT').onclick = () => add('text');
+  $('#eSave').onclick = async () => {
+    const msg = $('#eMsg'); msg.innerHTML = '';
+    try {
+      const dur = Math.round(Number($('#ed').value)); let pick = Math.round(Number($('#ek').value) || 0);
+      if (!(dur > 0)) throw new Error('সময় ঠিক নেই');
+      if (!Q.length) throw new Error('অন্তত একটি প্রশ্ন দাও');
+      const out = Q.map((q, i) => {
+        const t = q.text.trim(); if (!t) throw new Error(`প্রশ্ন ${i + 1}: প্রশ্নের লেখা নেই`);
+        if (!(q.marks > 0)) throw new Error(`প্রশ্ন ${i + 1}: নম্বর ঠিক নেই`);
+        if (q.type === 'mcq') {
+          const o = q.options.map(x => x.trim());
+          if (o.some(x => !x) && o.filter(x => x).length < o.length) { /* ফাঁকা লাইন বাদ */ }
+          const clean = o.filter(x => x), ans = o[q.answer];
+          if (clean.length < 2) throw new Error(`প্রশ্ন ${i + 1}: কমপক্ষে ২টি option লাগবে`);
+          if (!ans) throw new Error(`প্রশ্ন ${i + 1}: সঠিক উত্তর বেছে নাও`);
+          return {id: q.id, type: 'mcq', text: t, marks: q.marks, options: clean, answer: clean.indexOf(ans)};
+        }
+        return {id: q.id, type: 'text', text: t, marks: q.marks, note: q.note.trim()};
+      });
+      if (pick < 0 || pick >= out.length) pick = 0;
+      const sp = splitForStorage(out), title = $('#et').value.trim() || (p.designation || p.name);
+      $('#eSave').disabled = true;
+      await setDoc(doc(db, 'questionSets', id), {title, heading: $('#eh').value.trim(), questions: sp.pub});
+      await setDoc(doc(db, 'answerKeys', id), sp.key);
+      await updateDoc(doc(db, 'positions', id), {title, durationMin: dur, pick, qids: sp.qids, optCounts: sp.optCounts, totalMarks: sp.totalMarks, updatedAt: serverTimestamp()});
+      toast('✔ Save হয়েছে'); location.hash = '#questions';
+    } catch (e) { msg.innerHTML = '<span class="err">Save হয়নি: ' + esc(e.message) + '</span>'; $('#eSave').disabled = false; }
   };
 }
 
