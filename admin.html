@@ -137,7 +137,9 @@ async function viewSubs(){
     getDocs(collection(db, 'attempts')), getDocs(collection(db, 'questionSets')), getDocs(collection(db, 'answerKeys'))]);
   const qsets = {}, keys = {};
   qs.forEach(d => qsets[d.id] = d.data()); ks.forEach(d => keys[d.id] = d.data());
-  const list = as.docs.map(d => ({id: d.id, ...d.data()})).sort((a, b) => ms(b.startedAt) - ms(a.startedAt));
+  let arch = [];
+  try { arch = (await getDocs(collection(db, 'attemptsArchive'))).docs.map(d => ({id: 'arch:' + d.id, arch: true, ...d.data()})); } catch (e) {}
+  const list = [...as.docs.map(d => ({id: d.id, ...d.data()})), ...arch].sort((a, b) => ms(b.startedAt) - ms(a.startedAt));
   const desigs = [...new Set(list.map(a => a.designation))].sort();
 
   $('#view').innerHTML = `
@@ -165,15 +167,25 @@ async function viewSubs(){
     $('#cnt').textContent = rows.length;
     $('#rows').innerHTML = rows.map(a => { const st = statusOf(a);
       return `<tr><td>${esc(a.name)}</td><td>${esc(a.email)}${a.phone ? '<br><span class="muted">' + esc(a.phone) + '</span>' : ''}</td><td>${esc(a.designation)}</td>
-      <td><span class="badge b-${st}">${STATUS_LABEL[st]}</span></td>
+      <td><span class="badge b-${st}">${STATUS_LABEL[st]}</span>${a.arch ? '<br><span class="muted">পুরনো (Reset এর আগের)</span>' : ''}</td>
       <td>${fmt(a.startedAt)}</td><td>${fmt(a.submittedAt)}</td><td>${scoreCell(a)}</td><td>${resultBadge(a)}</td>
       <td style="white-space:nowrap"><a class="btn sm" href="#sheet/${encodeURIComponent(a.id)}">Answer sheet</a>
-        <button class="sec sm" data-reset="${esc(a.id)}">Reset</button></td></tr>`; }).join('')
+        ${a.arch ? '' : `<button class="sec sm" data-reset="${esc(a.id)}">Reset</button>`}
+        <button class="danger sm" data-rm="${esc(a.id)}">Remove Answer Paper</button></td></tr>`; }).join('')
       || '<tr><td colspan="9" class="muted">কিছু নেই</td></tr>';
     $('#rows').querySelectorAll('[data-reset]').forEach(b => b.onclick = async () => {
-      if (confirm(b.dataset.reset + ' এর attempt ও উত্তর মুছে আবার exam দেওয়ার সুযোগ দেবে?\n(মুছলে আর ফেরত পাবে না)')) {
+      if (!confirm(b.dataset.reset + ' কে আবার exam দেওয়ার সুযোগ দেবে?\n\nআগের উত্তরপত্র মুছবে না, "পুরনো" হিসেবে তালিকায় থেকে যাবে। candidate এর device ও আবার exam দিতে পারবে।')) return;
+      try {
+        const old = list.find(x => x.id === b.dataset.reset);
+        const {id: _i, ...data} = old;
+        if (old.status === 'submitted' || Object.keys(old.answers || {}).length) await setDoc(doc(db, 'attemptsArchive', old.id + '__' + Date.now()), {...data, archivedAt: serverTimestamp()});
         await deleteDoc(doc(db, 'attempts', b.dataset.reset)); viewSubs();
-      }
+      } catch (e) { alert('Reset হয়নি: ' + e.message + '\n(firestore.rules নতুনটা Publish করেছ?)'); }
+    });
+    $('#rows').querySelectorAll('[data-rm]').forEach(b => b.onclick = async () => {
+      if (!confirm('এই উত্তরপত্র পুরোপুরি মুছে ফেলবে? আর ফেরত পাবে না।')) return;
+      const arc = b.dataset.rm.startsWith('arch:');
+      await deleteDoc(doc(db, arc ? 'attemptsArchive' : 'attempts', arc ? b.dataset.rm.slice(5) : b.dataset.rm)); viewSubs();
     });
   };
   $('#fq').value = F.q; $('#fp').value = F.p; $('#fs').value = F.s; $('#fr').value = F.r;
@@ -467,7 +479,8 @@ async function viewPaper(id){
 ================================================================= */
 async function viewSheet(id){
   $('#view').innerHTML = '<div class="card">Loading...</div>';
-  const as = await getDoc(doc(db, 'attempts', id));
+  const COL = id.startsWith('arch:') ? 'attemptsArchive' : 'attempts', DID = id.replace(/^arch:/, '');
+  const as = await getDoc(doc(db, COL, DID));
   if (!as.exists()) { $('#view').innerHTML = '<div class="card">Attempt পাওয়া যায়নি। <a href="#subs">Back</a></div>'; return; }
   const att = as.data();
   const [qd, kd] = await Promise.all([getDoc(doc(db, 'questionSets', att.designation)), getDoc(doc(db, 'answerKeys', att.designation))]);
@@ -538,7 +551,7 @@ async function viewSheet(id){
       grading[i.dataset.q] = v;
     }
     const t = recalc();
-    await updateDoc(doc(db, 'attempts', id), {grading, remarks: $('#remarks').value, result: $('#res').value, totalScore: t, maxScore: c.max, gradedAt: serverTimestamp()});
+    await updateDoc(doc(db, COL, DID), {grading, remarks: $('#remarks').value, result: $('#res').value, totalScore: t, maxScore: c.max, gradedAt: serverTimestamp()});
     $('#saveMsg').innerHTML = '<span class="ok">Saved ✔</span>';
   };
 }
