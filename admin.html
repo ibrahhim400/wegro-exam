@@ -151,7 +151,7 @@ async function viewSubs(){
       <div><label>Result</label><select id="fr"><option value="">সব</option><option value="pending">Pending</option><option value="pass">Pass</option><option value="fail">Fail</option></select></div>
     </div>
     <div style="overflow-x:auto;margin-top:10px"><table>
-      <thead><tr><th>Name</th><th>Email</th><th>Position</th><th>Status</th><th>Started</th><th>Submitted</th><th>Score</th><th>Result</th><th></th></tr></thead>
+      <thead><tr><th>Name</th><th>Phone</th><th>Position</th><th>Status</th><th>Started</th><th>Submitted</th><th>Score</th><th>Result</th><th></th></tr></thead>
       <tbody id="rows"></tbody></table></div></div>`;
 
   const scoreCell = a => {
@@ -163,10 +163,10 @@ async function viewSubs(){
   const draw = () => {
     const q = $('#fq').value.trim().toLowerCase(), p = $('#fp').value, s = $('#fs').value, r = $('#fr').value;
     F.q = $('#fq').value; F.p = p; F.s = s; F.r = r;
-    const rows = list.filter(a => (!q || (a.name + ' ' + a.email).toLowerCase().includes(q)) && (!p || a.designation === p) && (!s || statusOf(a) === s) && (!r || resultOf(a) === r));
+    const rows = list.filter(a => (!q || (a.name + ' ' + (a.email || '') + ' ' + (a.phone || '')).toLowerCase().includes(q)) && (!p || a.designation === p) && (!s || statusOf(a) === s) && (!r || resultOf(a) === r));
     $('#cnt').textContent = rows.length;
     $('#rows').innerHTML = rows.map(a => { const st = statusOf(a);
-      return `<tr><td>${esc(a.name)}</td><td>${esc(a.email)}${a.phone ? '<br><span class="muted">' + esc(a.phone) + '</span>' : ''}</td><td>${esc(a.designation)}</td>
+      return `<tr><td>${esc(a.name)}</td><td>${esc(a.phone || '')}${a.email ? '<br><span class="muted">' + esc(a.email) + '</span>' : ''}</td><td>${esc(a.designation)}</td>
       <td><span class="badge b-${st}">${STATUS_LABEL[st]}</span>${a.arch ? '<br><span class="muted">পুরনো (Reset এর আগের)</span>' : ''}</td>
       <td>${fmt(a.startedAt)}</td><td>${fmt(a.submittedAt)}</td><td>${scoreCell(a)}</td><td>${resultBadge(a)}</td>
       <td style="white-space:nowrap"><a class="btn sm" href="#sheet/${encodeURIComponent(a.id)}">Answer sheet</a>
@@ -174,18 +174,23 @@ async function viewSubs(){
         <button class="danger sm" data-rm="${esc(a.id)}">Remove Answer Paper</button></td></tr>`; }).join('')
       || '<tr><td colspan="9" class="muted">কিছু নেই</td></tr>';
     $('#rows').querySelectorAll('[data-reset]').forEach(b => b.onclick = async () => {
-      if (!confirm(b.dataset.reset + ' কে আবার exam দেওয়ার সুযোগ দেবে?\n\nআগের উত্তরপত্র মুছবে না, "পুরনো" হিসেবে তালিকায় থেকে যাবে। candidate এর device ও আবার exam দিতে পারবে।')) return;
+      if (!confirm((list.find(x => x.id === b.dataset.reset) || {}).name + ' কে আবার exam দেওয়ার সুযোগ দেবে?\n\nআগের উত্তরপত্র মুছবে না, "পুরনো" হিসেবে তালিকায় থেকে যাবে। candidate এর device ও আবার exam দিতে পারবে।')) return;
       try {
         const old = list.find(x => x.id === b.dataset.reset);
         const {id: _i, ...data} = old;
         if (old.status === 'submitted' || Object.keys(old.answers || {}).length) await setDoc(doc(db, 'attemptsArchive', old.id + '__' + Date.now()), {...data, archivedAt: serverTimestamp()});
-        await deleteDoc(doc(db, 'attempts', b.dataset.reset)); viewSubs();
+        await deleteDoc(doc(db, 'attempts', b.dataset.reset));
+        if (old.phone) { try { await deleteDoc(doc(db, 'phones', old.phone)); } catch (e) {} }
+        viewSubs();
       } catch (e) { alert('Reset হয়নি: ' + e.message + '\n(firestore.rules নতুনটা Publish করেছ?)'); }
     });
     $('#rows').querySelectorAll('[data-rm]').forEach(b => b.onclick = async () => {
       if (!confirm('এই উত্তরপত্র পুরোপুরি মুছে ফেলবে? আর ফেরত পাবে না।')) return;
       const arc = b.dataset.rm.startsWith('arch:');
-      await deleteDoc(doc(db, arc ? 'attemptsArchive' : 'attempts', arc ? b.dataset.rm.slice(5) : b.dataset.rm)); viewSubs();
+      const old = list.find(x => x.id === b.dataset.rm);
+      await deleteDoc(doc(db, arc ? 'attemptsArchive' : 'attempts', arc ? b.dataset.rm.slice(5) : b.dataset.rm));
+      if (!arc && old && old.phone) { try { await deleteDoc(doc(db, 'phones', old.phone)); } catch (e) {} }
+      viewSubs();
     });
   };
   $('#fq').value = F.q; $('#fp').value = F.p; $('#fs').value = F.s; $('#fr').value = F.r;
@@ -514,7 +519,7 @@ async function viewSheet(id){
     <h2 style="text-align:center;margin:4px 0 2px">${esc(COMPANY_NAME)} – Pre-Join Exam Answer Sheet</h2>
     <div style="text-align:center" class="muted">${esc(qset.title || att.designation)}</div>
     <div class="sheet-head" style="margin-top:14px"><div><h3 style="margin:0 0 4px">${esc(att.name)}</h3>
-      <div>${esc(att.email)}</div>${att.phone ? `<div>Phone: ${esc(att.phone)}</div>` : ''}<div>Position: <b>${esc(att.designation)}</b></div></div>
+      ${att.email ? `<div>${esc(att.email)}</div>` : ''}${att.phone ? `<div>Phone: ${esc(att.phone)}</div>` : ''}<div>Position: <b>${esc(att.designation)}</b></div></div>
       <div style="text-align:right"><div>Started: ${fmt(att.startedAt)}</div><div>Submitted: ${fmt(att.submittedAt)}</div>
       <div>Time allowed: ${att.durationMin} min · Taken: ${taken}</div>
       <div>Tab switches: ${att.tabSwitches ?? 0}</div><div>Status: <b>${STATUS_LABEL[st]}</b></div></div></div>

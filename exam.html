@@ -11,22 +11,6 @@
 
 <div class="wrap">
 
-  <!-- Login -->
-  <section id="login" class="card screen" hidden>
-    <h2>Candidate Login</h2>
-    <p class="muted">তোমার email দাও। আমরা একটি login link পাঠাব, সেই link এ ক্লিক করলেই exam page খুলবে।</p>
-    <label for="email">Email</label>
-    <input id="email" type="email" placeholder="you@example.com" autocomplete="email">
-    <p><button id="sendLink">Send login link</button></p>
-    <div id="loginErr" class="err"></div>
-  </section>
-
-  <!-- Link sent -->
-  <section id="sent" class="card screen" hidden>
-    <h2>Check your email</h2>
-    <p>Login link পাঠানো হয়েছে। Inbox (না পেলে Spam folder) চেক করে link এ ক্লিক করো। এই একই browser এ link টি খুলতে হবে।</p>
-  </section>
-
   <!-- Message / error -->
   <section id="msg" class="card screen" hidden>
     <h2 id="msgTitle"></h2>
@@ -48,7 +32,7 @@
       <li><b>Start Exam</b> চাপার সাথে সাথে প্রশ্ন খুলবে এবং countdown শুরু হবে। Timer থামানো যাবে না।</li>
       <li>Page refresh করলে বা browser বন্ধ করলেও সময় চলতে থাকবে।</li>
       <li>সময় শেষ হলে উত্তর নিজে থেকেই submit হয়ে যাবে।</li>
-      <li>একবার submit হলে বা সময় শেষ হলে এই email বা এই device থেকে আর exam দেওয়া যাবে না।</li>
+      <li>একবার submit হলে বা সময় শেষ হলে এই ফোন নাম্বার বা এই device থেকে আর exam দেওয়া যাবে না।</li>
       <li>Start করার আগে তোমার Position ঠিক আছে কিনা ভালো করে দেখে নাও। ভুল Position বেছে শুরু করে ফেললে সাথে সাথে HR কে জানাও, HR নতুন করে exam শুরু করার সুযোগ দেবে।</li>
       <li>অন্য tab বা window এ যাওয়া রেকর্ড করা হয়।</li>
     </ul>
@@ -77,9 +61,9 @@
 <script type="module">
 import {firebaseConfig, COMPANY_NAME, NOTIFY_ACCESS_KEY} from "./firebase-config.js";
 import {initializeApp} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-import {getAuth,isSignInWithEmailLink,sendSignInLinkToEmail,signInWithEmailLink,onAuthStateChanged,signOut}
+import {getAuth,signInAnonymously,onAuthStateChanged,signOut}
   from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
-import {getFirestore,doc,getDoc,getDocs,setDoc,updateDoc,collection,query,where,serverTimestamp}
+import {getFirestore,doc,getDoc,getDocs,setDoc,updateDoc,collection,query,where,writeBatch,serverTimestamp}
   from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
 const app = initializeApp(firebaseConfig);
@@ -93,9 +77,9 @@ function message(t,b){ $('msgTitle').textContent=t; $('msgBody').textContent=b; 
 $('company').textContent = COMPANY_NAME + " – Pre-Join Exam";
 document.title = COMPANY_NAME + " Exam";
 
-const ALREADY = 'তুমি ইতোমধ্যে এই exam দিয়েছ (already submitted)। এই email বা এই device থেকে আর exam দেওয়া যাবে না।';
+const ALREADY = 'তুমি ইতোমধ্যে এই exam দিয়েছ (already submitted)। এই ফোন নাম্বার বা এই device থেকে আর exam দেওয়া যাবে না।';
 
-let offset = 0, email = '', attempt = null, qset = null, byId = {}, settings = {}, answers = {};
+let offset = 0, uid = '', attempt = null, qset = null, byId = {}, settings = {}, answers = {};
 let tabSwitches = 0, timerId = null, submitting = false, dirty = false, saveTimer = null, positions = [], initedFor = '';
 
 /* ---------- device lock (এই browser এ চিহ্ন রাখা) ---------- */
@@ -108,68 +92,35 @@ const devClear = () => { try { localStorage.removeItem(DEV_KEY); } catch (e) {} 
 function rnd(n){ const a = new Uint32Array(1); crypto.getRandomValues(a); return a[0] % n; }
 function shuffle(arr){ const a = [...arr]; for (let i = a.length - 1; i > 0; i--) { const j = rnd(i + 1); [a[i], a[j]] = [a[j], a[i]]; } return a; }
 
-/* ---------- Login ---------- */
-$('sendLink').onclick = async () => {
-  const e = $('email').value.trim().toLowerCase();
-  $('loginErr').textContent = '';
-  if (!e) { $('loginErr').textContent = 'Email দাও।'; return; }
-  try {
-    await sendSignInLinkToEmail(auth, e, {url: location.origin + location.pathname, handleCodeInApp: true});
-    localStorage.setItem('emailForSignIn', e);
-    show('sent');
-  } catch (err) { $('loginErr').textContent = 'Link পাঠানো যায়নি: ' + err.message; }
-};
-$('logout1').onclick = () => signOut(auth).then(() => location.href = location.pathname);
-
-let linkDone = null, linkFailed = false;
-function completeLinkLogin(){
-  if (linkDone) return linkDone;                        // একবারই চলবে (দ্বিতীয়বার email চাওয়ার bug এড়াতে)
-  const href = location.href;
-  if (!isSignInWithEmailLink(auth, href)) return (linkDone = Promise.resolve());
-  history.replaceState({}, '', location.pathname);      // link এর অংশ সাথে সাথে সরাও
-  linkDone = (async () => {
-    let e = localStorage.getItem('emailForSignIn') || prompt('নিরাপত্তার জন্য তোমার email আবার দাও:');
-    try {
-      await signInWithEmailLink(auth, (e || '').trim().toLowerCase(), href);
-      localStorage.removeItem('emailForSignIn');
-    } catch (err) { linkFailed = true; }
-  })();
-  return linkDone;
-}
-
-onAuthStateChanged(auth, async () => {
-  await completeLinkLogin().catch(() => {});
-  const u = auth.currentUser;
-  if (!u && linkFailed) { linkFailed = false; $('logout1').textContent = 'নতুন link নাও'; return message('Login link কাজ করেনি', 'এই link আগেই ব্যবহার হয়ে গেছে বা মেয়াদ শেষ। নিচের বাটনে চেপে আবার email দিয়ে নতুন link নাও এবং শুধু একবার click করো।'); }
-  if (!u) { show('login'); return; }
-  const em = u.email.toLowerCase();
-  if (initedFor === em) return;                       // একই user এর জন্য একবারের বেশি init না
-  initedFor = em;
-  init(u).catch(err => message('Error', err.message));
+/* ---------- Login (email ছাড়া, নিজে থেকে anonymous session) ---------- */
+$('logout1').onclick = () => location.reload();
+onAuthStateChanged(auth, async user => {
+  if (!user) {
+    try { await signInAnonymously(auth); } catch (e) { message('Error', 'Login করা যায়নি: ' + e.message + ' (HR কে জানাও)'); }
+    return;
+  }
+  if (initedFor === user.uid) return;
+  initedFor = user.uid;
+  init(user).catch(err => message('Error', err.message));
 });
 
 /* ---------- Init ---------- */
 async function init(user){
-  email = user.email.toLowerCase();
-  $('who').textContent = email;
+  uid = user.uid;
 
   try { const s = await getDoc(doc(db, 'settings', 'main')); if (s.exists()) settings = s.data(); } catch (e) {}
   const lock = settings.deviceLock !== false;
-  const dev = lock ? devGet() : null;
-  if (dev && dev.email !== email) return message('Already submitted', ALREADY);
 
   // server সময়ের সাথে device এর ঘড়ির পার্থক্য
-  await setDoc(doc(db, 'pings', email), {t: serverTimestamp()});
-  const p = await getDoc(doc(db, 'pings', email));
+  await setDoc(doc(db, 'pings', uid), {t: serverTimestamp()});
+  const p = await getDoc(doc(db, 'pings', uid));
   offset = p.data().t.toMillis() - Date.now();
 
-  const at = await getDoc(doc(db, 'attempts', email));
-  if (!at.exists()) {
-    if (dev && dev.email === email) devClear();        // admin Reset করলে আবার সুযোগ
-    return showStart();
-  }
+  const at = await getDoc(doc(db, 'attempts', uid));
+  if (!at.exists()) return showStart();
   attempt = at.data();
-  if (lock) devSet({email, at: Date.now()});
+  if (lock) devSet({phone: attempt.phone, at: Date.now()});
+  $('who').textContent = attempt.name || '';
   if (attempt.status === 'submitted') return message('Already submitted', ALREADY);
 
   const endMs = attempt.startedAt.toMillis() + attempt.durationMin * 60000;
@@ -203,6 +154,7 @@ async function showStart(){
   $('startBtn').onclick = startExam;
 }
 const stripSet = t => String(t || '').replace(/\s*[,\-–]?\s*Set\s*[A-Za-z]\s*$/i, '').trim();
+const normPhone = v => { let d = String(v || '').replace(/\D/g, ''); if (d.startsWith('880') && d.length === 13) d = '0' + d.slice(3); return d; };
 const des = p => p.designation || stripSet(p.name);
 const count = p => (p.pick > 0 ? Math.min(p.pick, p.qids.length) : p.qids.length);
 
@@ -212,9 +164,11 @@ async function startExam(){
   const group = positions.filter(x => des(x) === $('sPos').value);
   const p = group.length ? group[Math.floor(Math.random() * group.length)] : null;   // একাধিক Set থাকলে random একটা
   if (name.length < 2) { $('startErr').textContent = 'তোমার নাম লেখো।'; return; }
-  const phone = $('sPhone').value.trim();
-  if (!/^\+?[0-9][0-9\s-]{8,17}$/.test(phone)) { $('startErr').textContent = 'সঠিক ফোন নাম্বার লেখো।'; return; }
+  const phone = normPhone($('sPhone').value);
+  if (!/^[0-9]{10,15}$/.test(phone)) { $('startErr').textContent = 'সঠিক ফোন নাম্বার লেখো।'; return; }
   if (!p) { $('startErr').textContent = 'Position বেছে নাও।'; return; }
+  const dev = settings.deviceLock !== false ? devGet() : null;
+  if (dev && dev.phone !== phone) return message('Already submitted', ALREADY);   // এই device এ আগে অন্য নাম্বার দিয়ে exam হয়েছে
   if (!confirm(`${des(p)} এর exam এখনই শুরু হবে এবং ${p.durationMin} মিনিটের countdown চলবে। শুরু করবে?\n\nPosition ঠিক আছে তো? শুরু করার পর নিজে বদলানো যাবে না।`)) return;
   $('startBtn').disabled = true;
   try {
@@ -222,15 +176,20 @@ async function startExam(){
     const order = shuffle(p.qids).slice(0, count(p));
     const optionOrder = {};
     order.forEach(id => { const n = p.optCounts && p.optCounts[id]; if (n) optionOrder[id] = shuffle([...Array(n).keys()]); });
-    await setDoc(doc(db, 'attempts', email), {
-      name, phone, email, designation: p.id, durationMin: p.durationMin,
+    // একই ফোন নাম্বারে একবারই: phones/{নাম্বার} দ্বিতীয়বার বানানো যায় না (server rules এ আটকায়)
+    const batch = writeBatch(db);
+    batch.set(doc(db, 'phones', phone), {uid, at: serverTimestamp()});
+    batch.set(doc(db, 'attempts', uid), {
+      name, phone, designation: p.id, durationMin: p.durationMin,
       startedAt: serverTimestamp(), status: 'started', answers: {}, order, optionOrder
     });
-    if (settings.deviceLock !== false) devSet({email, at: Date.now()});
-    attempt = (await getDoc(doc(db, 'attempts', email))).data();
+    await batch.commit();
+    if (settings.deviceLock !== false) devSet({phone, at: Date.now()});
+    attempt = (await getDoc(doc(db, 'attempts', uid))).data();
     await loadQuestions();
     runExam();
   } catch (err) {
+    if (err && err.code === 'permission-denied') return message('Already submitted', ALREADY + '\n(ভুল হয়ে থাকলে HR কে জানাও।)');
     $('startErr').textContent = 'Start করা যায়নি: ' + err.message;
     $('startBtn').disabled = false;
   }
@@ -247,9 +206,9 @@ async function loadQuestions(){
 function runExam(){
   const order = (attempt.order && attempt.order.length ? attempt.order : qset.questions.map(q => q.id)).filter(id => byId[id]);
   let local = {};
-  try { local = JSON.parse(localStorage.getItem('ans_' + email) || '{}'); } catch (e) {}
+  try { local = JSON.parse(localStorage.getItem('ans_' + uid) || '{}'); } catch (e) {}
   answers = {...(attempt.answers || {}), ...local};
-  tabSwitches = Math.max(Number(attempt.tabSwitches || 0), Number(localStorage.getItem('tab_' + email) || 0));
+  tabSwitches = Math.max(Number(attempt.tabSwitches || 0), Number(localStorage.getItem('tab_' + uid) || 0));
 
   const box = $('questions'); box.innerHTML = '';
   order.forEach((id, i) => {
@@ -274,7 +233,7 @@ function runExam(){
   show('exam');
 
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden && !submitting) { tabSwitches++; try { localStorage.setItem('tab_' + email, tabSwitches); } catch (e) {} markDirty(); }
+    if (document.hidden && !submitting) { tabSwitches++; try { localStorage.setItem('tab_' + uid, tabSwitches); } catch (e) {} markDirty(); }
   });
   window.addEventListener('beforeunload', e => { if (!submitting) { e.preventDefault(); e.returnValue = ''; } });
   setInterval(save, 20000);
@@ -294,7 +253,7 @@ function onInput(e){
   const t = e.target;
   if (t.type === 'radio') answers[t.name] = Number(t.value);
   else if (t.dataset.q) answers[t.dataset.q] = t.value;
-  try { localStorage.setItem('ans_' + email, JSON.stringify(answers)); } catch (err) {}
+  try { localStorage.setItem('ans_' + uid, JSON.stringify(answers)); } catch (err) {}
   updateCount(); markDirty();
 }
 function updateCount(){
@@ -309,7 +268,7 @@ async function save(){
   if (!dirty || submitting) return;
   dirty = false;
   try {
-    await updateDoc(doc(db, 'attempts', email), {answers, tabSwitches});
+    await updateDoc(doc(db, 'attempts', uid), {answers, tabSwitches});
     $('saved').textContent = '· saved ' + new Date().toLocaleTimeString();
   } catch (e) { dirty = true; }
 }
@@ -323,11 +282,11 @@ async function submit(auto){
   clearInterval(timerId); clearTimeout(saveTimer);
   for (let i = 0; i < 4; i++) {
     try {
-      await updateDoc(doc(db, 'attempts', email), {
+      await updateDoc(doc(db, 'attempts', uid), {
         answers, status: 'submitted', submittedAt: serverTimestamp(), tabSwitches
       });
-      try { localStorage.removeItem('ans_' + email); localStorage.removeItem('tab_' + email); } catch (e) {}
-      if (settings.deviceLock !== false) devSet({email, at: Date.now()});
+      try { localStorage.removeItem('ans_' + uid); localStorage.removeItem('tab_' + uid); } catch (e) {}
+      if (settings.deviceLock !== false) devSet({phone: attempt.phone, at: Date.now()});
       notify(auto);
       return showDone(auto);
     } catch (err) {
@@ -355,10 +314,10 @@ async function notify(auto){
         access_key: NOTIFY_ACCESS_KEY,
         subject: `New exam submission: ${attempt.name} (${attempt.designation})`,
         from_name: COMPANY_NAME + ' Exam System',
-        name: attempt.name, email: email,
-        message: `Candidate: ${attempt.name}\nPhone: ${attempt.phone || ''}\nEmail: ${email}\nPosition: ${attempt.designation}\n` +
+        name: attempt.name,
+        message: `Candidate: ${attempt.name}\nPhone: ${attempt.phone || ''}\nPosition: ${attempt.designation}\n` +
           `Submitted: ${new Date().toLocaleString()}${auto ? ' (auto-submitted, time over)' : ''}\n` +
-          `Tab switches: ${tabSwitches}\n\nAnswer sheet: ${location.href.split('?')[0].replace('exam.html', 'admin.html')}#sheet/${encodeURIComponent(email)}`
+          `Tab switches: ${tabSwitches}\n\nAnswer sheet: ${location.href.split('?')[0].replace('exam.html', 'admin.html')}#sheet/${encodeURIComponent(uid)}`
       })
     });
   } catch (e) { /* নোটিফিকেশন না গেলেও submit ঠিক আছে; admin panel এ সব দেখা যাবে */ }
