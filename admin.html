@@ -24,6 +24,7 @@
     <div class="tabs noprint" id="tabs">
       <a href="#subs" data-t="subs">Submissions</a>
       <a href="#questions" data-t="questions">Question Sets</a>
+      <a href="#invite" data-t="invite">Send Link</a>
       <a href="#settings" data-t="settings">Settings</a>
     </div>
     <div id="view"></div>
@@ -77,6 +78,7 @@ function route(){
   const a = decodeURIComponent(arg || '');
   if (page === 'questions') viewQuestions();
   else if (page === 'settings') viewSettings();
+  else if (page === 'invite') viewInvite();
   else if (page === 'sheet') viewSheet(a);
   else if (page === 'paper') viewPaper(a);
   else if (page === 'edit') viewEdit(a);
@@ -567,18 +569,68 @@ async function viewSheet(id){
 /* =================================================================
    Settings
 ================================================================= */
+async function getMail(){ try { const d = await getDoc(doc(db, 'adminConfig', 'mail')); return d.exists() ? d.data() : {}; } catch (e) { return {}; } }
+
+/* =================================================================
+   Candidate কে exam link email করা
+================================================================= */
+async function viewInvite(){
+  const mail = await getMail(), auto = !!(mail.service && mail.template && mail.key);
+  const link = location.href.split('#')[0].replace(/admin\.html.*$/, '') + 'exam.html';
+  const mk = () => ({to: $('#ie').value.trim(), subject: COMPANY_NAME + ' – Pre-Join Exam',
+    body: `Dear Candidate,\n\nPlease take your pre-join exam using the link below:\n${link}\n\n` + ($('#ir').value.trim() ? $('#ir').value.trim() + '\n\n' : '') + `Regards,\nHR, ${COMPANY_NAME}`});
+  $('#view').innerHTML = `<div class="card"><h2>Candidate কে exam link পাঠাও</h2>
+    <label>Candidate এর Email</label><input id="ie" type="email" placeholder="candidate@example.com">
+    <label>Remarks / নির্দেশনা (ঐচ্ছিক)</label><textarea id="ir" placeholder="যেমন: আগামীকাল সকাল ১০টার মধ্যে exam দিতে হবে।"></textarea>
+    <p class="muted">Email এ exam এর link নিজে থেকে যুক্ত হবে: <b>${esc(link)}</b></p>
+    <p><button id="isend">${auto ? 'Send' : 'Send (Gmail খুলবে)'}</button> <span id="imsg"></span></p>
+    <div class="muted">${auto ? 'EmailJS চালু আছে: বাটন চাপলে সরাসরি email চলে যাবে।' : 'EmailJS সেট করা নেই, তাই Gmail এর compose পাতা খুলবে, সেখানে Send চাপলেই যাবে। সরাসরি পাঠাতে Settings এ EmailJS দাও।'}</div></div>
+    <div class="card"><b>Preview</b><pre id="ipre" style="white-space:pre-wrap;font:inherit;margin:8px 0 0"></pre></div>`;
+  const pv = () => { $('#ipre').textContent = mk().body; };
+  $('#ir').oninput = pv; pv();
+  $('#isend').onclick = async () => {
+    const m = mk(), msg = $('#imsg');
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(m.to)) { msg.innerHTML = '<span class="err">সঠিক email দাও</span>'; return; }
+    if (!auto) {
+      window.open('https://mail.google.com/mail/?view=cm&fs=1&to=' + encodeURIComponent(m.to) + '&su=' + encodeURIComponent(m.subject) + '&body=' + encodeURIComponent(m.body), '_blank');
+      msg.innerHTML = '<span class="ok">Gmail খুলেছে, Send চাপো।</span>'; return;
+    }
+    $('#isend').disabled = true; msg.textContent = 'Sending...';
+    try {
+      const r = await fetch('https://api.emailjs.com/api/v1.0/email/send', {method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({service_id: mail.service, template_id: mail.template, user_id: mail.key, template_params: {to_email: m.to, subject: m.subject, message: m.body, link, remarks: $('#ir').value.trim()}})});
+      if (!r.ok) throw new Error(await r.text());
+      msg.innerHTML = '<span class="ok">পাঠানো হয়েছে ✔ ' + esc(m.to) + '</span>'; $('#ie').value = '';
+    } catch (e) { msg.innerHTML = '<span class="err">পাঠানো যায়নি: ' + esc(e.message) + '</span>'; }
+    $('#isend').disabled = false;
+  };
+}
+
 async function viewSettings(){
   $('#view').innerHTML = '<div class="card">Loading...</div>';
   let s = {};
   try { const d = await getDoc(doc(db, 'settings', 'main')); if (d.exists()) s = d.data(); } catch (e) {}
+  const mail = await getMail();
   $('#view').innerHTML = `
   <div class="card"><h2>Settings</h2>
     <label class="inline"><input type="checkbox" id="dl" ${s.deviceLock !== false ? 'checked' : ''}> Device lock: যে browser/device থেকে exam দেওয়া হয়েছে সেখান থেকে অন্য email দিয়ে আবার দেওয়া যাবে না</label>
     <p class="muted" style="margin-top:0">অফিসের একটাই কম্পিউটারে একের পর এক candidate কে exam দেওয়ালে এটা বন্ধ রাখো (নইলে দ্বিতীয় জন আটকে যাবে)। একই email এ দ্বিতীয়বার exam দেওয়া সবসময় বন্ধ থাকে।</p>
     <p><button id="saveS">Save settings</button> <span id="sMsg"></span></p>
     <hr style="border:0;border-top:1px solid var(--line)">
+    <h3 style="margin-bottom:4px">Candidate কে সরাসরি email পাঠানো (EmailJS, ঐচ্ছিক)</h3>
+    <p class="muted" style="margin-top:0">ফাঁকা রাখলে "Send Link" বাটন Gmail এর compose পাতা খুলে দেবে (তুমি শুধু Send চাপবে)। নিচের তিনটি ভরলে বাটন চাপলেই email নিজে থেকে চলে যাবে। <a href="https://www.emailjs.com" target="_blank">emailjs.com</a> এ বিনামূল্যে account (মাসে ২০০ email)।</p>
+    <div class="row"><div><label>Service ID</label><input id="ms" value="${esc(mail.service || '')}" placeholder="service_xxxxx"></div>
+      <div><label>Template ID</label><input id="mt" value="${esc(mail.template || '')}" placeholder="template_xxxxx"></div>
+      <div><label>Public Key</label><input id="mk" value="${esc(mail.key || '')}" placeholder="xxxxxxxxxxxx"></div></div>
+    <p><button id="saveM" class="sec">Save email সেটিং</button> <span id="mMsg"></span></p>
     <p><b>Email নোটিফিকেশন:</b> ${NOTIFY_ACCESS_KEY ? '<span class="ok">চালু আছে</span>' : '<span class="err">বন্ধ</span> (firebase-config.js এ NOTIFY_ACCESS_KEY বসাতে হবে, README দেখো)'}</p>
   </div>`;
+  $('#saveM').onclick = async () => {
+    try {
+      await setDoc(doc(db, 'adminConfig', 'mail'), {service: $('#ms').value.trim(), template: $('#mt').value.trim(), key: $('#mk').value.trim(), updatedAt: serverTimestamp()});
+      $('#mMsg').innerHTML = '<span class="ok">Saved ✔</span>';
+    } catch (e) { $('#mMsg').innerHTML = '<span class="err">Save হয়নি: ' + esc(e.message) + '</span>'; }
+  };
   $('#saveS').onclick = async () => {
     try {
       await setDoc(doc(db, 'settings', 'main'), {deviceLock: $('#dl').checked, updatedAt: serverTimestamp()});
