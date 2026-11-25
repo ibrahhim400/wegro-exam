@@ -574,6 +574,19 @@ async function getMail(){ try { const d = await getDoc(doc(db, 'adminConfig', 'm
 /* =================================================================
    Candidate কে exam link email করা
 ================================================================= */
+const DEFAULT_REMARKS = [
+  '* Link এ ক্লিক করে Exam পেইজে যান ।',
+  '* Start Exam চাপার সাথে সাথে প্রশ্ন খুলবে এবং countdown শুরু হবে। Timer থামানো যাবে না।',
+  '* Page refresh করলে বা browser বন্ধ করলেও সময় চলতে থাকবে।',
+  '* সময় শেষ হলে উত্তর নিজে থেকেই submit হয়ে যাবে।',
+  '* একবার submit হলে বা সময় শেষ হলে এই ফোন নাম্বার বা এই device থেকে আর exam দেওয়া যাবে না।',
+  '* Start করার আগে তোমার Position ঠিক আছে কিনা ভালো করে দেখে নাও। ভুল Position বেছে শুরু করে ফেললে সাথে সাথে HR কে জানাও, HR নতুন করে exam শুরু করার সুযোগ দেবে।',
+  '* অন্য tab বা window এ যাওয়া রেকর্ড করা হয়।',
+  '',
+  'যোগাযোগের জন্যঃ +8801322891565',
+  'উইগ্রো সম্পর্কে জানতে ক্লিক করুনঃ https://www.youtube.com/@WeGroGlobalLearningAcademy'
+].join('\n');
+
 async function viewInvite(){
   const mail = await getMail(), auto = !!(mail.service && mail.template && mail.key);
   const link = location.href.split('#')[0].replace(/admin\.html.*$/, '') + 'exam.html';
@@ -587,6 +600,7 @@ async function viewInvite(){
     <div class="muted">${auto ? 'EmailJS চালু আছে: বাটন চাপলে সরাসরি email চলে যাবে।' : 'EmailJS সেট করা নেই, তাই Gmail এর compose পাতা খুলবে, সেখানে Send চাপলেই যাবে। সরাসরি পাঠাতে Settings এ EmailJS দাও।'}</div></div>
     <div class="card"><b>Preview</b><pre id="ipre" style="white-space:pre-wrap;font:inherit;margin:8px 0 0"></pre></div>`;
   const pv = () => { $('#ipre').textContent = mk().body; };
+  $('#ir').value = DEFAULT_REMARKS; $('#ir').style.minHeight = '260px';
   $('#ir').oninput = pv; pv();
   $('#isend').onclick = async () => {
     const m = mk(), msg = $('#imsg');
