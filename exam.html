@@ -80,7 +80,7 @@ document.title = COMPANY_NAME + " Exam";
 const ALREADY = 'তুমি ইতোমধ্যে এই exam দিয়েছ (already submitted)। এই ফোন নাম্বার বা এই device থেকে আর exam দেওয়া যাবে না।';
 
 let offset = 0, uid = '', attempt = null, qset = null, byId = {}, settings = {}, answers = {};
-let tabSwitches = 0, timerId = null, submitting = false, dirty = false, saveTimer = null, positions = [], initedFor = '';
+let tabLog = [], awayAt = 0, awayKind = '', tabSwitches = 0, timerId = null, submitting = false, dirty = false, saveTimer = null, positions = [], initedFor = '';
 
 /* ---------- device lock (এই browser এ চিহ্ন রাখা) ---------- */
 const DEV_KEY = 'wegro_exam_device';
@@ -208,6 +208,7 @@ function runExam(){
   let local = {};
   try { local = JSON.parse(localStorage.getItem('ans_' + uid) || '{}'); } catch (e) {}
   answers = {...(attempt.answers || {}), ...local};
+  tabLog = Array.isArray(attempt.tabLog) ? attempt.tabLog : [];
   tabSwitches = Math.max(Number(attempt.tabSwitches || 0), Number(localStorage.getItem('tab_' + uid) || 0));
 
   const box = $('questions'); box.innerHTML = '';
@@ -232,9 +233,14 @@ function runExam(){
   updateCount();
   show('exam');
 
-  document.addEventListener('visibilitychange', () => {
-    if (document.hidden && !submitting) { tabSwitches++; try { localStorage.setItem('tab_' + uid, tabSwitches); } catch (e) {} markDirty(); }
-  });
+  // অন্য tab/window এ যাওয়া: কখন গেছে, কতক্ষণ ছিল (কোন site/app সেটা browser জানতে দেয় না)
+  try { const l = JSON.parse(localStorage.getItem('log_' + uid) || '[]'); if (l.length > tabLog.length) tabLog = l; } catch (e) {}
+  tabLog = tabLog.slice(0, 200);
+  const away = () => { if (submitting || awayAt) return; awayAt = Date.now(); awayKind = document.hidden ? 'tab' : 'window'; tabSwitches++; try { localStorage.setItem('tab_' + uid, tabSwitches); } catch (e) {} };
+  const back = () => { if (!awayAt) return; closeAway(); markDirty(); };
+  document.addEventListener('visibilitychange', () => document.hidden ? away() : back());
+  window.addEventListener('blur', away);
+  window.addEventListener('focus', back);
   window.addEventListener('beforeunload', e => { if (!submitting) { e.preventDefault(); e.returnValue = ''; } });
   setInterval(save, 20000);
 
@@ -264,11 +270,19 @@ function updateCount(){
 
 /* ---------- auto-save (browser বন্ধ হলেও উত্তর server এ থাকে) ---------- */
 function markDirty(){ dirty = true; clearTimeout(saveTimer); saveTimer = setTimeout(save, 2500); }
+function closeAwayIfBack(){ if (awayAt && !document.hidden && document.hasFocus()) closeAway(); }
+function closeAway(){
+  if (!awayAt) return;
+  if (tabLog.length < 200) tabLog.push({t: awayAt + offset, s: Math.max(1, Math.round((Date.now() - awayAt) / 1000)), k: awayKind});
+  awayAt = 0;
+  try { localStorage.setItem('log_' + uid, JSON.stringify(tabLog)); } catch (e) {}
+}
 async function save(){
   if (!dirty || submitting) return;
   dirty = false;
   try {
-    await updateDoc(doc(db, 'attempts', uid), {answers, tabSwitches});
+    closeAwayIfBack();
+    await updateDoc(doc(db, 'attempts', uid), {answers, tabSwitches, tabLog});
     $('saved').textContent = '· saved ' + new Date().toLocaleTimeString();
   } catch (e) { dirty = true; }
 }
@@ -280,12 +294,13 @@ async function submit(auto){
   if (submitting) return; submitting = true;
   $('submitBtn').disabled = true; $('subErr').textContent = 'Submitting...';
   clearInterval(timerId); clearTimeout(saveTimer);
+  closeAway();
   for (let i = 0; i < 4; i++) {
     try {
       await updateDoc(doc(db, 'attempts', uid), {
-        answers, status: 'submitted', submittedAt: serverTimestamp(), tabSwitches
+        answers, status: 'submitted', submittedAt: serverTimestamp(), tabSwitches, tabLog
       });
-      try { localStorage.removeItem('ans_' + uid); localStorage.removeItem('tab_' + uid); } catch (e) {}
+      try { localStorage.removeItem('ans_' + uid); localStorage.removeItem('tab_' + uid); localStorage.removeItem('log_' + uid); } catch (e) {}
       if (settings.deviceLock !== false) devSet({phone: attempt.phone, at: Date.now()});
       notify(auto);
       return showDone(auto);
